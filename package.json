@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-"scripts": {
-  "start": "node server.js"
-},
+  "scripts": {
+    "start": "node server.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/huturmoodz/mymoodz-subscription-api.git"
@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/huturmoodz/mymoodz-subscription-api#readme",
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^5.2.1"
   }
 }
