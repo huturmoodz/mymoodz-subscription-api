@@ -3,12 +3,11 @@ const express = require('express');
 const cors = require('cors');
 
 const {
-  saveGiftChoice,
-  getGiftChoiceForSubscription,
   getAllGiftChoices,
 } = require('./core/customerGifts');
-// plus tard on utilisera vraiment giftEngine
-const { changeGiftForSubscription } = require('./core/giftEngine');
+
+const { applyGiftChange } = require('./core/giftEngine');
+
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -63,33 +62,33 @@ app.get('/debug/gifts', (req, res) => {
  */
 app.post('/change-gift', async (req, res) => {
   try {
-    const { subscriptionId, customerId, giftCode } = req.body || {};
+    const { subscriptionId, customerEmail, giftCode } = req.body || {};
 
     if (!subscriptionId || !giftCode) {
       return res.status(400).json({
-        ok: false,
+        success: false,
         error: 'subscriptionId et giftCode sont obligatoires',
       });
     }
 
-    // 1) On sauvegarde la demande dans notre petit store mémoire
-    const saved = saveGiftChoice({ subscriptionId, customerId, giftCode });
-
-    // 2) Plus tard : ici on appellera vraiment Shopify / Seal
-    // await changeGiftForSubscription({ subscriptionId, giftCode });
-
-    return res.json({
-      ok: true,
-      data: saved,
+    // On délègue tout au moteur de cadeau
+    const result = await applyGiftChange({
+      subscriptionId,
+      customerEmail,
+      giftCode,
     });
+
+    // result ressemble à : { success: true, data: { ... } }
+    return res.json(result);
   } catch (err) {
     console.error('[/change-gift] ERROR', err);
     return res.status(500).json({
-      ok: false,
+      success: false,
       error: 'Internal server error',
     });
   }
 });
+
 
 // -------- Lancement du serveur --------
 app.listen(PORT, () => {
