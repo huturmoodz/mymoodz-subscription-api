@@ -1,86 +1,95 @@
 // server.js
-const express = require("express");
-const cors = require("cors");
+const express = require('express');
+const cors = require('cors');
 
 const {
   saveGiftChoice,
   getGiftChoiceForSubscription,
   getAllGiftChoices,
-} = require("./core/customerGifts");
+} = require('./core/customerGifts');
+// plus tard on utilisera vraiment giftEngine
+const { changeGiftForSubscription } = require('./core/giftEngine');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middlewares
-app.use(cors());
+// -------- Middlewares globaux --------
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-Requested-With'],
+}));
+
 app.use(express.json());
 
-// Ping de base
-app.get("/", (req, res) => {
-  res.json({ ok: true, message: "MyMoodz Subscription API" });
+// -------- Routes de base --------
+
+app.get('/', (req, res) => {
+  res.json({ ok: true, message: 'MyMoodz Subscription API' });
 });
 
 /**
- * POST /change-gift
- * Body JSON :
- * {
- *   "subscriptionId": "TEST_SUB_1",
- *   "customerId": "123",        // optionnel
- *   "giftCode": "ESSENTIEL_BN"
- * }
+ * Debug : voir les variables d'environnement importantes
+ * (on ne renvoie que des booléens, pas les valeurs)
  */
-app.post("/change-gift", (req, res) => {
-  console.log("[/change-gift] body =", req.body);
+app.get('/debug/env', (req, res) => {
+  res.json({
+    ok: true,
+    env: {
+      SHOPIFY_STORE_DOMAIN: !!process.env.SHOPIFY_STORE_DOMAIN,
+      SHOPIFY_ADMIN_ACCESS_TOKEN: !!process.env.SHOPIFY_ADMIN_ACCESS_TOKEN,
+      SHOPIFY_API_VERSION: process.env.SHOPIFY_API_VERSION || null,
+      SEAL_WEBHOOK_SECRET: !!process.env.SEAL_WEBHOOK_SECRET,
+      NODE_ENV: process.env.NODE_ENV || null,
+    },
+  });
+});
 
+/**
+ * Debug : liste tous les choix de cadeaux en mémoire
+ */
+app.get('/debug/gifts', (req, res) => {
+  res.json({
+    ok: true,
+    data: getAllGiftChoices(),
+  });
+});
+
+/**
+ * Endpoint utilisé par ta page "Gérer mon cadeau"
+ * pour enregistrer le nouveau cadeau choisi.
+ */
+app.post('/change-gift', async (req, res) => {
   try {
     const { subscriptionId, customerId, giftCode } = req.body || {};
 
     if (!subscriptionId || !giftCode) {
       return res.status(400).json({
         ok: false,
-        error: "subscriptionId et giftCode sont obligatoires",
+        error: 'subscriptionId et giftCode sont obligatoires',
       });
     }
 
-    const record = saveGiftChoice({ subscriptionId, customerId, giftCode });
+    // 1) On sauvegarde la demande dans notre petit store mémoire
+    const saved = saveGiftChoice({ subscriptionId, customerId, giftCode });
+
+    // 2) Plus tard : ici on appellera vraiment Shopify / Seal
+    // await changeGiftForSubscription({ subscriptionId, giftCode });
 
     return res.json({
       ok: true,
-      data: record,
+      data: saved,
     });
   } catch (err) {
-    console.error("[/change-gift] ERROR:", err);
+    console.error('[/change-gift] ERROR', err);
     return res.status(500).json({
       ok: false,
-      error: err.message || "Internal server error",
+      error: 'Internal server error',
     });
   }
 });
 
-/**
- * GET /debug/gifts
- * -> liste tous les choix enregistrés (MVP)
- */
-app.get("/debug/gifts", (req, res) => {
-  const all = getAllGiftChoices();
-  res.json({ ok: true, data: all });
-});
-
-/**
- * GET /debug/gifts/:subscriptionId
- * -> détail pour un abonnement
- */
-app.get("/debug/gifts/:subscriptionId", (req, res) => {
-  const subId = req.params.subscriptionId;
-  const record = getGiftChoiceForSubscription(subId);
-
-  if (!record) {
-    return res.status(404).json({ ok: false, error: "Not found" });
-  }
-
-  res.json({ ok: true, data: record });
-});
-
+// -------- Lancement du serveur --------
 app.listen(PORT, () => {
-  console.log(`MyMoodz Subscription API listening on port ${PORT}`);
+  console.log(`MyMoodz subscription API running on port ${PORT}`);
 });
