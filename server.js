@@ -1,71 +1,126 @@
 // server.js
+
 const express = require("express");
 const cors = require("cors");
 
+// 🧠 Notre moteur de cadeaux + stockage
+const { resolveGift } = require("./core/giftEngine");
+const {
+  saveGiftChoice,
+  getGiftChoiceForSubscription,
+} = require("./core/customerGifts");
+
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(
+  cors({
+    origin: "*", // MVP : on ouvrira éventuellement plus finement plus tard
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
+// --- Healthcheck basique ---
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    message: "MyMoodz Subscription API",
+  });
+});
 
-// Liste officielle des cadeaux acceptés
-const ALLOWED_GIFTS = ["pod_zero", "pod_bonne_nuit", "pod_bien_etre"];
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
 
-/**
- * PHASE 1 :
- * Fake function – remplacera la vraie API Seal plus tard
- */
-async function updateGiftInSeal(subscriptionId, giftCode) {
-  console.log("📦 [FAKE] Mise à jour dans Seal: ", subscriptionId, giftCode);
-  return true;
-}
-
-app.post("/change-gift", async (req, res) => {
-  console.log("📩 Nouveau /change-gift reçu :", req.body);
-
-  const { giftCode, subscriptionId, customerEmail } = req.body;
-
-  // 1️⃣ Validation inputs
-  if (!subscriptionId || !customerEmail || !giftCode) {
-    return res.status(400).json({
-      success: false,
-      message: "Champs manquants. Requête invalide.",
-    });
-  }
-
-  // 2️⃣ Validation cadeau
-  if (!ALLOWED_GIFTS.includes(giftCode)) {
-    return res.status(400).json({
-      success: false,
-      message: `Code cadeau invalide : ${giftCode}`,
-    });
-  }
-
+// --------------------------------------------------
+// 1) Endpoint appellé par ta page "Gérer mon cadeau"
+//    -> enregistre le choix du client
+// --------------------------------------------------
+app.post("/change-gift", (req, res) => {
   try {
-    /**
-     * 3️⃣ Appel logique (fake pour le moment)
-     */
-    const ok = await updateGiftInSeal(subscriptionId, giftCode);
-    if (!ok) {
-      return res.status(500).json({
-        success: false,
-        message: "Erreur interne — impossible de mettre à jour dans Seal.",
+    const { subscriptionId, customerId, giftCode } = req.body || {};
+
+    if (!subscriptionId || !giftCode) {
+      return res.status(400).json({
+        ok: false,
+        error: "subscriptionId et giftCode sont obligatoires",
       });
     }
 
+    const record = saveGiftChoice({ subscriptionId, customerId, giftCode });
+
     return res.json({
-      success: true,
-      message: "Votre cadeau a bien été mis à jour (mode test).",
+      ok: true,
+      message: "Choix de cadeau enregistré",
+      data: record,
     });
   } catch (err) {
-    console.error("❌ ERREUR change-gift:", err);
+    console.error("[change-gift] error:", err);
     return res.status(500).json({
-      success: false,
-      message: "Erreur technique serveur.",
+      ok: false,
+      error: "Erreur interne",
     });
   }
 });
 
-app.listen(PORT, () =>
-  console.log(`🚀 API MyMoodz démarrée sur port ${PORT}`)
-);
+// --------------------------------------------------
+// 2) Endpoint pour "résoudre" le cadeau final
+//    (sera utilisé par le webhook plus tard)
+// --------------------------------------------------
+app.post("/gift/resolve", (req, res) => {
+  try {
+    const {
+      subscriptionId,
+      flavorCode,
+      subscriptionFreeGiftCode,
+    } = req.body || {};
+
+    // On regarde s'il y a déjà un choix client enregistré
+    let customerGiftCode = null;
+    if (subscriptionId) {
+      const existing = getGiftChoiceForSubscription(subscriptionId);
+      if (existing && existing.giftCode) {
+        customerGiftCode = existing.giftCode;
+      }
+    }
+
+    // On laisse le moteur décider
+    const gift = resolveGift({
+      flavorCode: flavorCode || null,
+      customerGiftCode,
+      subscriptionFreeGiftCode: subscriptionFreeGiftCode || null,
+    });
+
+    return res.json({
+      ok: true,
+      gift,
+    });
+  } catch (err) {
+    console.error("[gift/resolve] error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Erreur interne",
+    });
+  }
+});
+
+// --------------------------------------------------
+// 3) Endpoint de debug pour voir ce qui est stocké
+// --------------------------------------------------
+app.get("/debug/gifts/:subscriptionId", (req, res) => {
+  const { subscriptionId } = req.params;
+  const record = getGiftChoiceForSubscription(subscriptionId);
+  return res.json({
+    ok: true,
+    data: record || null,
+  });
+});
+
+// Lancement du serveur
+app.listen(PORT, () => {
+  console.log(`MyMoodz subscription API listening on port ${PORT}`);
+});
