@@ -39,11 +39,13 @@ app.get('/debug/env', (req, res) => {
       SHOPIFY_STORE_DOMAIN: !!process.env.SHOPIFY_STORE_DOMAIN,
       SHOPIFY_ADMIN_ACCESS_TOKEN: !!process.env.SHOPIFY_ADMIN_ACCESS_TOKEN,
       SHOPIFY_API_VERSION: process.env.SHOPIFY_API_VERSION || null,
+      SEAL_API_TOKEN: !!process.env.SEAL_API_TOKEN,   // 👈 AJOUT
       SEAL_WEBHOOK_SECRET: !!process.env.SEAL_WEBHOOK_SECRET,
       NODE_ENV: process.env.NODE_ENV || null,
     },
   });
 });
+
 
 /**
  * Debug : liste tous les choix de cadeaux en mémoire
