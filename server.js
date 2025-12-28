@@ -1,120 +1,86 @@
 // server.js
-
 const express = require("express");
 const cors = require("cors");
 
 const {
-  getFlavorForSubscription,
-  getDefaultGiftForFlavor,
-} = require("./core/giftEngine");
-
-const {
   saveGiftChoice,
   getGiftChoiceForSubscription,
-  listAllGiftChoices,
+  getAllGiftChoices,
 } = require("./core/customerGifts");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-// ----- Middlewares -----
-app.use(
-  cors({
-    origin: [
-      "https://mymoodz.co",
-      "https://www.mymoodz.co",
-      "https://mymoodz.fr",
-      "https://www.mymoodz.fr",
-      "http://localhost:3000",
-      "http://localhost:5173",
-    ],
-    methods: ["GET", "POST", "OPTIONS"],
-    credentials: true,
-  })
-);
-
-// Pour lire le JSON envoyé par le front
+// Middlewares
+app.use(cors());
 app.use(express.json());
 
-// ----- Routes de base -----
+// Ping de base
 app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    message: "MyMoodz Subscription API",
-  });
+  res.json({ ok: true, message: "MyMoodz Subscription API" });
 });
 
-// ----- Route principale : choix de cadeau -----
-app.post("/api/gift-choice", (req, res) => {
+/**
+ * POST /change-gift
+ * Body JSON :
+ * {
+ *   "subscriptionId": "TEST_SUB_1",
+ *   "customerId": "123",        // optionnel
+ *   "giftCode": "ESSENTIEL_BN"
+ * }
+ */
+app.post("/change-gift", (req, res) => {
+  console.log("[/change-gift] body =", req.body);
+
   try {
-    const {
-      subscriptionId, // ex: "1050" (ou ID interne temporaire)
-      customerId,
-      flavorCode, // ex: "BN"
-      giftCode,   // optionnel : si non fourni, on en déduit un par défaut
-    } = req.body || {};
+    const { subscriptionId, customerId, giftCode } = req.body || {};
 
-    if (!subscriptionId) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "missing-subscription-id" });
+    if (!subscriptionId || !giftCode) {
+      return res.status(400).json({
+        ok: false,
+        error: "subscriptionId et giftCode sont obligatoires",
+      });
     }
 
-    // 1) Si pas de giftCode explicite, on en déduit un à partir de la flavor
-    let finalGiftCode = giftCode || null;
+    const record = saveGiftChoice({ subscriptionId, customerId, giftCode });
 
-    if (!finalGiftCode) {
-      const flavor =
-        flavorCode || getFlavorForSubscription(subscriptionId) || null;
-
-      finalGiftCode = flavor ? getDefaultGiftForFlavor(flavor) : null;
-    }
-
-    if (!finalGiftCode) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "missing-gift-code-and-flavor" });
-    }
-
-    // 2) On stocke le choix en mémoire
-    const saved = saveGiftChoice({
-      subscriptionId,
-      customerId,
-      giftCode: finalGiftCode,
+    return res.json({
+      ok: true,
+      data: record,
     });
-
-    return res.json({ ok: true, data: saved });
   } catch (err) {
-    console.error("[/api/gift-choice] error:", err);
-    return res.status(500).json({ ok: false, error: "server-error" });
+    console.error("[/change-gift] ERROR:", err);
+    return res.status(500).json({
+      ok: false,
+      error: err.message || "Internal server error",
+    });
   }
 });
 
-// ----- Alias de compatibilité : /change-gift -----
-app.post("/change-gift", (req, res) => {
-  // On réutilise exactement la même logique que /api/gift-choice
-  req.url = "/api/gift-choice";
-  app._router.handle(req, res);
+/**
+ * GET /debug/gifts
+ * -> liste tous les choix enregistrés (MVP)
+ */
+app.get("/debug/gifts", (req, res) => {
+  const all = getAllGiftChoices();
+  res.json({ ok: true, data: all });
 });
 
-// ----- Debug : un abonnement précis -----
+/**
+ * GET /debug/gifts/:subscriptionId
+ * -> détail pour un abonnement
+ */
 app.get("/debug/gifts/:subscriptionId", (req, res) => {
-  const { subscriptionId } = req.params;
-  const record = getGiftChoiceForSubscription(subscriptionId);
+  const subId = req.params.subscriptionId;
+  const record = getGiftChoiceForSubscription(subId);
 
   if (!record) {
-    return res.status(404).json({ ok: false, error: "not-found" });
+    return res.status(404).json({ ok: false, error: "Not found" });
   }
-  return res.json({ ok: true, data: record });
+
+  res.json({ ok: true, data: record });
 });
 
-// ----- Debug : tous les choix enregistrés -----
-app.get("/debug/gifts", (req, res) => {
-  const all = listAllGiftChoices();
-  return res.json({ ok: true, data: all });
-});
-
-// ----- Start -----
 app.listen(PORT, () => {
-  console.log(`MyMoodz subscription API listening on port ${PORT}`);
+  console.log(`MyMoodz Subscription API listening on port ${PORT}`);
 });
