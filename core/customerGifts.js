@@ -37,7 +37,15 @@ function getGiftChoiceForSubscription(subscriptionId) {
   return memoryStore.get(subscriptionId) || null;
 }
 
+/**
+ * Liste tous les choix en mémoire (debug uniquement).
+ */
+function listAllGiftChoices() {
+  return Array.from(memoryStore.values());
+}
+
 module.exports = {
   saveGiftChoice,
   getGiftChoiceForSubscription,
+  listAllGiftChoices,
 };
