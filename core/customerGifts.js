@@ -6,6 +6,7 @@
  * value = { giftCode, updatedAt, customerId? }
  *
  * ⚠️ MVP : ne survit pas à un redeploy Render.
+ * On l'utilise pour valider le flow.
  */
 const memoryStore = new Map();
 
@@ -37,7 +38,7 @@ function getGiftChoiceForSubscription(subscriptionId) {
 }
 
 /**
- * Pour le debug : retourne tous les choix enregistrés.
+ * Debug : renvoie tous les choix de cadeaux en mémoire
  */
 function getAllGiftChoices() {
   return Array.from(memoryStore.values());
