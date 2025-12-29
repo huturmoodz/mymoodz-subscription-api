@@ -12,6 +12,10 @@ const { applyGiftChange } = require('./core/giftEngine');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+const SEAL_API_TOKEN = process.env.SEAL_API_TOKEN;
+const SEAL_BASE_URL = 'https://app.sealsubscriptions.com/shopify/merchant/api';
+
+
 // -------- Middlewares globaux --------
 app.use(cors({
   origin: '*',
@@ -55,6 +59,89 @@ app.get('/debug/gifts', (req, res) => {
     data: getAllGiftChoices(),
   });
 });
+
+
+/**
+ * Retourne les abonnements Seal d'un client (par email)
+ * GET /subscriptions-for-customer?email=xxx
+ */
+app.get('/subscriptions-for-customer', async (req, res) => {
+  try {
+    const email = req.query.email;
+    if (!email) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Paramètre email manquant',
+      });
+    }
+
+    if (!SEAL_API_TOKEN) {
+      return res.status(500).json({
+        ok: false,
+        error: 'SEAL_API_TOKEN manquant côté serveur',
+      });
+    }
+
+    const url = `${SEAL_BASE_URL}/subscriptions?query=${encodeURIComponent(
+      email
+    )}&with-items=true&active-only=true`;
+
+    const sealRes = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Seal-Token': SEAL_API_TOKEN,
+      },
+    });
+
+    let json = null;
+    try {
+      json = await sealRes.json();
+    } catch (e) {
+      console.error('[subscriptions-for-customer] Réponse Seal non JSON');
+    }
+
+    if (!sealRes.ok || !json || json.success === false) {
+      console.error('[subscriptions-for-customer] Erreur Seal', {
+        status: sealRes.status,
+        body: json,
+      });
+      return res.status(500).json({
+        ok: false,
+        error: 'Erreur Seal API',
+      });
+    }
+
+    const subs = Array.isArray(json.payload) ? json.payload : [];
+
+    // On renvoie un format simplifié
+    const simplified = subs.map((s) => ({
+      id: s.id,
+      status: s.status,
+      email: s.email,
+      total_value: s.total_value,
+      items: s.items?.map((item) => ({
+        id: item.id,
+        title: item.title,
+        variant_id: item.variant_id,
+        price: item.price,
+        quantity: item.quantity,
+      })) || [],
+    }));
+
+    return res.json({
+      ok: true,
+      subscriptions: simplified,
+    });
+  } catch (err) {
+    console.error('[/subscriptions-for-customer] ERROR', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'Internal server error',
+    });
+  }
+});
+
 
 /**
  * Endpoint utilisé par ta page "Gérer mon cadeau"
