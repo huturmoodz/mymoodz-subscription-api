@@ -13,18 +13,18 @@ const SEAL_BASE_URL =
  */
 const GIFT_VARIANTS = {
   pod_bonne_nuit: {
-    product_id: '10339299262805',
-    variant_id: '52143294251349',
+    product_id: '10297464586581',
+    variant_id: '52030628725077',
     title: 'PODS Bonnes Nuits - 1 Mois',
   },
   pod_zero: {
-    product_id: '10339299656021',
-    variant_id: '52143295037781',
+    product_id: '10297464586581',
+    variant_id: '52166742147413',
     title: 'PODS Zéro - 1 Mois',
   },
   pod_bien_etre: {
-    product_id: '10339299623253',
-    variant_id: '52143294939477',
+    product_id: '10297464586581',
+    variant_id: '52166741197141',
     title: 'PODS Bien-être - 1 Mois',
   },
 };
