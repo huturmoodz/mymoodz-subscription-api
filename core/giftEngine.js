@@ -2,18 +2,18 @@
 
 const GIFT_VARIANTS = {
   pod_bonne_nuit: {
-    product_id: 'ID_PRODUIT_BN',
-    variant_id: 'ID_VARIANT_BN',
+    product_id: '10339299262805',
+    variant_id: '52143294251349',
     title: 'PODS Bonnes Nuits - 1 Mois',
   },
   pod_zero: {
-    product_id: 'ID_PRODUIT_ZERO',
-    variant_id: 'ID_VARIANT_ZERO',
+    product_id: '10339299656021',
+    variant_id: '52143295037781',
     title: 'PODS Zéro - 1 Mois',
   },
   pod_bien_etre: {
-    product_id: 'ID_PRODUIT_BE',
-    variant_id: 'ID_VARIANT_BE',
+    product_id: '10339299623253',
+    variant_id: '52143294939477',
     title: 'PODS Bien-être - 1 Mois',
   },
 };
