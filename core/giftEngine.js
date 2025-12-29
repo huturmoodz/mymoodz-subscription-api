@@ -1,4 +1,3 @@
-
 // core/giftEngine.js
 
 const { saveGiftChoice } = require('./customerGifts');
@@ -9,23 +8,26 @@ const SEAL_BASE_URL =
 
 /**
  * Mapping des cadeaux -> produits/variantes Shopify vus par Seal
- * ⚠️ REMPLACE les IDs ci-dessous par les vrais (ce que tu as déjà fait).
+ * (IDs que tu as déjà remplis)
  */
 const GIFT_VARIANTS = {
   pod_bonne_nuit: {
     product_id: '10297464586581',
     variant_id: '52030628725077',
     title: 'PODS Bonnes Nuits - 1 Mois',
+    sku: null,
   },
   pod_zero: {
     product_id: '10297464586581',
     variant_id: '52166742147413',
     title: 'PODS Zéro - 1 Mois',
+    sku: null,
   },
   pod_bien_etre: {
     product_id: '10297464586581',
     variant_id: '52166741197141',
     title: 'PODS Bien-être - 1 Mois',
+    sku: null,
   },
 };
 
@@ -60,12 +62,18 @@ async function callSeal(path, options) {
   }
 
   if (!res.ok || !json || json.success === false) {
-    console.error('[giftEngine] Erreur Seal', {
+    const err = new Error(
+      (json && json.message) ||
+        (json && json.error) ||
+        `Seal error on ${path}`
+    );
+    err.seal = {
       url,
       status: res.status,
       body: json,
-    });
-    throw new Error(`Seal error on ${path}`);
+    };
+    console.error('[giftEngine] Erreur Seal', err.seal);
+    throw err;
   }
 
   return json;
@@ -107,8 +115,7 @@ async function updateNoteAttribute(subscriptionId, giftCode) {
 }
 
 /**
- * Supprime tous les items cadeau (toutes nos variantes cadeau) de la subscription
- * --> utilise action: "remove_items", comme dans la doc
+ * Supprime tous les items cadeau de la subscription
  */
 async function removeExistingGiftItems(subscription) {
   const items = subscription.items || [];
@@ -136,7 +143,8 @@ async function removeExistingGiftItems(subscription) {
 }
 
 /**
- * Construit l’item cadeau à ajouter (format conforme à "add_items" dans la doc)
+ * Construit l’item cadeau à ajouter
+ * → on colle au format de la doc, avec le max de champs safe
  */
 function buildGiftItem(giftCode) {
   const cfg = GIFT_VARIANTS[giftCode];
@@ -147,11 +155,13 @@ function buildGiftItem(giftCode) {
     variant_id: String(cfg.variant_id),
     quantity: '1',
     title: cfg.title,
-    sku: null,
-    price: 0, // cadeau = 0€
+    sku: cfg.sku,
+    price: '0.00',               // string, comme dans leur exemple
     taxable: 0,
     requires_shipping: 1,
-    one_time: 1, // 1 = item one-shot, on le remettra à chaque cycle via webhook
+    one_time: 1,                 // cadeau one-shot pour ce cycle
+    total_discount: 0,
+    subsc_discount_percent: 0,
     properties: [],
   };
 }
@@ -189,7 +199,7 @@ async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
     throw new Error('subscriptionId et giftCode sont obligatoires');
   }
 
-  // 0) On garde une trace côté serveur (debug + backup)
+  // 0) Trace côté serveur (debug + backup)
   const record = saveGiftChoice({
     subscriptionId,
     customerId: customerEmail || null,
@@ -229,6 +239,7 @@ async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
     noteResult = await updateNoteAttribute(subscriptionId, giftCode);
   } catch (err) {
     console.error('[giftEngine] Erreur applyGiftChange', err);
+
     return {
       success: false,
       error: err.message || 'Erreur lors de la mise à jour du cadeau',
@@ -236,6 +247,7 @@ async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
         ...record,
         removedIds,
         subscriptionId,
+        sealError: err.seal || null, // 👈 très important pour debug
       },
     };
   }
