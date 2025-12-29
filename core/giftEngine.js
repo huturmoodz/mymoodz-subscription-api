@@ -1,5 +1,16 @@
+
 // core/giftEngine.js
 
+const { saveGiftChoice } = require('./customerGifts');
+
+const SEAL_API_TOKEN = process.env.SEAL_API_TOKEN;
+const SEAL_BASE_URL =
+  'https://app.sealsubscriptions.com/shopify/merchant/api';
+
+/**
+ * Mapping des cadeaux -> produits/variantes Shopify vus par Seal
+ * ⚠️ REMPLACE les IDs ci-dessous par les vrais (ce que tu as déjà fait).
+ */
 const GIFT_VARIANTS = {
   pod_bonne_nuit: {
     product_id: '10339299262805',
@@ -18,211 +29,227 @@ const GIFT_VARIANTS = {
   },
 };
 
-// core/giftEngine.js
+// Pour reconnaître tous les items cadeau déjà présents dans l’abonnement
+const GIFT_VARIANT_ID_SET = new Set(
+  Object.values(GIFT_VARIANTS).map((g) => String(g.variant_id))
+);
 
+/* ------------------ Helpers Seal ------------------ */
 
-
-const { saveGiftChoice } = require('./customerGifts');
-
-
-const SEAL_API_TOKEN = process.env.SEAL_API_TOKEN;
-const SEAL_BASE_URL = 'https://app.sealsubscriptions.com/shopify/merchant/api';
-
-async function fetchSealSubscription(idNumber) {
-  const res = await fetch(`${SEAL_BASE_URL}/subscription?id=${idNumber}`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Seal-Token': SEAL_API_TOKEN,
-    },
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json || !json.payload) {
-    throw new Error('Erreur Seal /subscription');
-  }
-  return json.payload;
-}
-
-async function updateSealSubscriptionGiftItems({ subscriptionId, giftCode }) {
+async function callSeal(path, options) {
   if (!SEAL_API_TOKEN) {
-    console.warn('[giftEngine] Pas de SEAL_API_TOKEN, skip update items');
-    return { skipped: true, reason: 'NO_SEAL_TOKEN' };
+    throw new Error('SEAL_API_TOKEN manquant');
   }
 
-  const cfg = GIFT_VARIANTS[giftCode];
-  if (!cfg) {
-    console.warn('[giftEngine] Pas de mapping pour giftCode', giftCode);
-    return { skipped: true, reason: 'NO_MAPPING' };
-  }
-
-  const idNumber = Number(subscriptionId);
-  const sub = await fetchSealSubscription(idNumber);
-
-  const items = sub.items || [];
-
-  // On considère que le cadeau est la ligne à 0 €
-  const existingGift = items.find((it) => Number(it.price) === 0);
-
-  // Si déjà le bon variant -> rien à faire
-  if (existingGift && String(existingGift.variant_id) === String(cfg.variant_id)) {
-    return { changed: false, reason: 'ALREADY_OK' };
-  }
-
-  // 1) Supprimer l’ancien cadeau s’il existe
-  if (existingGift) {
-    await fetch(SEAL_BASE_URL + '/subscription', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Seal-Token': SEAL_API_TOKEN,
-      },
-      body: JSON.stringify({
-        id: idNumber,
-        action: 'remove_items',
-        remove_items: [existingGift.id],
-      }),
-    });
-  }
-
-  // 2) Ajouter le nouveau cadeau
-  await fetch(SEAL_BASE_URL + '/subscription', {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Seal-Token': SEAL_API_TOKEN,
-    },
-    body: JSON.stringify({
-      id: idNumber,
-      action: 'add_items',
-      add_items: [
-        {
-          product_id: cfg.product_id,
-          variant_id: cfg.variant_id,
-          quantity: 1,
-          title: cfg.title,
-          price: '0.0',
-          taxable: 0,
-          requires_shipping: 1,
-          one_time: 0,
-          properties: [],
-        },
-      ],
-    }),
-  });
-
-  return { changed: true };
-}
-
-
-
-/**
- * Appelle l'API Merchant de Seal pour écrire le code cadeau
- * dans les note_attributes de l'abonnement.
- */
-async function updateSealSubscriptionNote({ subscriptionId, giftCode }) {
-  if (!SEAL_API_TOKEN) {
-    console.warn('[giftEngine] SEAL_API_TOKEN manquant, on saute l’appel Seal.');
-    return { skipped: true, reason: 'NO_SEAL_TOKEN' };
-  }
-
-  if (!subscriptionId || !giftCode) {
-    throw new Error('subscriptionId et giftCode sont obligatoires pour Seal.');
-  }
-
-  const url =
-    'https://app.sealsubscriptions.com/shopify/merchant/api/subscription';
-
-  // Seal attend un ID numérique
-  const idNumber = Number(subscriptionId);
-
-  const body = {
-    id: idNumber,
-    action: 'edit',
-    edit: {
-      // On écrase ce note_attributes avec notre clé
-      note_attributes: [
-        {
-          name: 'mymoodz_free_gift_code',
-          value: giftCode,
-        },
-      ],
-    },
-  };
-
-  console.log('[giftEngine] Appel Seal /subscription', {
-    id: idNumber,
-    giftCode,
-  });
+  const url = `${SEAL_BASE_URL}${path}`;
 
   const res = await fetch(url, {
-    method: 'PUT',
+    ...(options || {}),
     headers: {
       'Content-Type': 'application/json',
       'X-Seal-Token': SEAL_API_TOKEN,
+      ...(options && options.headers),
     },
-    body: JSON.stringify(body),
   });
 
   let json = null;
   try {
     json = await res.json();
   } catch (e) {
-    console.error('[giftEngine] Impossible de parser la réponse Seal en JSON');
+    console.error('[giftEngine] Réponse Seal non-JSON', url);
   }
 
   if (!res.ok || !json || json.success === false) {
-    console.error('[giftEngine] Erreur Seal API', {
+    console.error('[giftEngine] Erreur Seal', {
+      url,
       status: res.status,
       body: json,
     });
-    throw new Error('Seal API returned an error');
+    throw new Error(`Seal error on ${path}`);
   }
 
   return json;
 }
 
 /**
- * Fonction principale appelée par /change-gift
+ * Récupère la subscription complète (endpoint /subscription)
  */
+async function fetchSubscription(subscriptionId) {
+  const idNumber = Number(subscriptionId);
+  const json = await callSeal(`/subscription?id=${idNumber}`, {
+    method: 'GET',
+  });
+
+  return json.payload || json;
+}
+
+/**
+ * Met à jour la note mymoodz_free_gift_code sur la subscription
+ */
+async function updateNoteAttribute(subscriptionId, giftCode) {
+  const idNumber = Number(subscriptionId);
+
+  return callSeal('/subscription', {
+    method: 'PUT',
+    body: JSON.stringify({
+      id: idNumber,
+      action: 'edit',
+      edit: {
+        note_attributes: [
+          {
+            name: 'mymoodz_free_gift_code',
+            value: giftCode,
+          },
+        ],
+      },
+    }),
+  });
+}
+
+/**
+ * Supprime tous les items cadeau (toutes nos variantes cadeau) de la subscription
+ * --> utilise action: "remove_items", comme dans la doc
+ */
+async function removeExistingGiftItems(subscription) {
+  const items = subscription.items || [];
+  const toRemoveIds = items
+    .filter((it) => GIFT_VARIANT_ID_SET.has(String(it.variant_id)))
+    .map((it) => it.id);
+
+  if (toRemoveIds.length === 0) {
+    console.log('[giftEngine] Aucun ancien cadeau à retirer');
+    return [];
+  }
+
+  console.log('[giftEngine] Retrait des cadeaux existants', toRemoveIds);
+
+  await callSeal('/subscription', {
+    method: 'PUT',
+    body: JSON.stringify({
+      id: subscription.id,
+      action: 'remove_items',
+      remove_items: toRemoveIds,
+    }),
+  });
+
+  return toRemoveIds;
+}
+
+/**
+ * Construit l’item cadeau à ajouter (format conforme à "add_items" dans la doc)
+ */
+function buildGiftItem(giftCode) {
+  const cfg = GIFT_VARIANTS[giftCode];
+  if (!cfg) return null;
+
+  return {
+    product_id: String(cfg.product_id),
+    variant_id: String(cfg.variant_id),
+    quantity: '1',
+    title: cfg.title,
+    sku: null,
+    price: 0, // cadeau = 0€
+    taxable: 0,
+    requires_shipping: 1,
+    one_time: 1, // 1 = item one-shot, on le remettra à chaque cycle via webhook
+    properties: [],
+  };
+}
+
+/**
+ * Ajoute le nouvel item cadeau via action: "add_items"
+ */
+async function addGiftItem(subscriptionId, giftCode) {
+  const item = buildGiftItem(giftCode);
+  if (!item) {
+    console.warn('[giftEngine] Pas de config pour le giftCode', giftCode);
+    return null;
+  }
+
+  console.log('[giftEngine] Ajout du cadeau', { subscriptionId, item });
+
+  const idNumber = Number(subscriptionId);
+
+  const res = await callSeal('/subscription', {
+    method: 'PUT',
+    body: JSON.stringify({
+      id: idNumber,
+      action: 'add_items',
+      add_items: [item],
+    }),
+  });
+
+  return res;
+}
+
+/* ------------------ Fonction principale ------------------ */
+
 async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
   if (!subscriptionId || !giftCode) {
     throw new Error('subscriptionId et giftCode sont obligatoires');
   }
 
-  // 1) Trace en mémoire
+  // 0) On garde une trace côté serveur (debug + backup)
   const record = saveGiftChoice({
     subscriptionId,
     customerId: customerEmail || null,
     giftCode,
   });
 
-  // 2) Note Seal
-  let sealNoteResult = null;
-  try {
-    sealNoteResult = await updateSealSubscriptionNote({ subscriptionId, giftCode });
-  } catch (err) {
-    console.error('[giftEngine] Erreur update note Seal:', err.message);
+  if (!SEAL_API_TOKEN) {
+    console.warn(
+      '[giftEngine] SEAL_API_TOKEN manquant, on ne touche pas à Seal.'
+    );
+    return {
+      success: true,
+      data: {
+        ...record,
+        sealNoteUpdated: false,
+        sealItemsUpdated: false,
+      },
+    };
   }
 
-  // 3) Items Seal (vrai pod cadeau)
-  let sealItemsResult = null;
+  let subscription = null;
+  let removedIds = [];
+  let addResult = null;
+  let noteResult = null;
+
   try {
-    sealItemsResult = await updateSealSubscriptionGiftItems({ subscriptionId, giftCode });
+    // 1) Récupérer la subscription complète
+    subscription = await fetchSubscription(subscriptionId);
+
+    // 2) Retirer tous les anciens cadeaux
+    removedIds = await removeExistingGiftItems(subscription);
+
+    // 3) Ajouter le nouveau cadeau
+    addResult = await addGiftItem(subscriptionId, giftCode);
+
+    // 4) Mettre à jour la note
+    noteResult = await updateNoteAttribute(subscriptionId, giftCode);
   } catch (err) {
-    console.error('[giftEngine] Erreur update items Seal:', err.message);
+    console.error('[giftEngine] Erreur applyGiftChange', err);
+    return {
+      success: false,
+      error: err.message || 'Erreur lors de la mise à jour du cadeau',
+      data: {
+        ...record,
+        removedIds,
+        subscriptionId,
+      },
+    };
   }
 
   return {
     success: true,
     data: {
       ...record,
-      sealNoteResult,
-      sealItemsResult,
+      removedIds,
+      addResult,
+      noteResult,
     },
   };
 }
-
 
 module.exports = {
   applyGiftChange,
