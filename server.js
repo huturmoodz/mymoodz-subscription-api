@@ -123,14 +123,18 @@ app.get('/subscriptions-for-customer', async (req, res) => {
     // On essaie plusieurs formats possibles de payload
     let subsRaw = [];
 
-    if (Array.isArray(json.payload)) {
-      subsRaw = json.payload;
+    // ✅ CAS RÉEL : Seal renvoie { success: true, payload: { subscriptions: [...] } }
+    if (json.payload && Array.isArray(json.payload.subscriptions)) {
+      subsRaw = json.payload.subscriptions;
     } else if (Array.isArray(json.subscriptions)) {
       subsRaw = json.subscriptions;
+    } else if (Array.isArray(json.payload)) {
+      subsRaw = json.payload;
     } else if (Array.isArray(json)) {
-      // au cas où l’API renverrait directement un tableau
+      // Au cas où l’API renverrait directement un tableau
       subsRaw = json;
     }
+
 
     const simplified = subsRaw.map((s) => ({
       id: s.id,
