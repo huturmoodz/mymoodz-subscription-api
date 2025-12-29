@@ -65,6 +65,10 @@ app.get('/debug/gifts', (req, res) => {
  * Retourne les abonnements Seal d'un client (par email)
  * GET /subscriptions-for-customer?email=xxx
  */
+/**
+ * Retourne les abonnements Seal d'un client (par email)
+ * GET /subscriptions-for-customer?email=xxx
+ */
 app.get('/subscriptions-for-customer', async (req, res) => {
   try {
     const email = req.query.email;
@@ -86,6 +90,8 @@ app.get('/subscriptions-for-customer', async (req, res) => {
       email
     )}&with-items=true&active-only=true`;
 
+    console.log('[subscriptions-for-customer] Call Seal URL =', url);
+
     const sealRes = await fetch(url, {
       method: 'GET',
       headers: {
@@ -101,37 +107,50 @@ app.get('/subscriptions-for-customer', async (req, res) => {
       console.error('[subscriptions-for-customer] Réponse Seal non JSON');
     }
 
-    if (!sealRes.ok || !json || json.success === false) {
-      console.error('[subscriptions-for-customer] Erreur Seal', {
+    if (!sealRes.ok || !json) {
+      console.error('[subscriptions-for-customer] Erreur Seal brute', {
         status: sealRes.status,
         body: json,
       });
       return res.status(500).json({
         ok: false,
         error: 'Erreur Seal API',
+        sealStatus: sealRes.status,
+        sealBody: json || null,
       });
     }
 
-    const subs = Array.isArray(json.payload) ? json.payload : [];
+    // On essaie plusieurs formats possibles de payload
+    let subsRaw = [];
 
-    // On renvoie un format simplifié
-    const simplified = subs.map((s) => ({
+    if (Array.isArray(json.payload)) {
+      subsRaw = json.payload;
+    } else if (Array.isArray(json.subscriptions)) {
+      subsRaw = json.subscriptions;
+    } else if (Array.isArray(json)) {
+      // au cas où l’API renverrait directement un tableau
+      subsRaw = json;
+    }
+
+    const simplified = subsRaw.map((s) => ({
       id: s.id,
       status: s.status,
       email: s.email,
       total_value: s.total_value,
-      items: s.items?.map((item) => ({
+      items: (s.items || []).map((item) => ({
         id: item.id,
         title: item.title,
         variant_id: item.variant_id,
         price: item.price,
         quantity: item.quantity,
-      })) || [],
+      })),
     }));
 
     return res.json({
       ok: true,
       subscriptions: simplified,
+      // debug : on renvoie aussi la réponse brute pour voir la structure
+      sealRaw: json,
     });
   } catch (err) {
     console.error('[/subscriptions-for-customer] ERROR', err);
@@ -141,6 +160,7 @@ app.get('/subscriptions-for-customer', async (req, res) => {
     });
   }
 });
+
 
 
 /**
