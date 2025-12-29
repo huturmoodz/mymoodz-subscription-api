@@ -190,31 +190,39 @@ async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
     throw new Error('subscriptionId et giftCode sont obligatoires');
   }
 
-  // 1) On garde une trace en mémoire (debug + backup)
+  // 1) Trace en mémoire
   const record = saveGiftChoice({
     subscriptionId,
     customerId: customerEmail || null,
     giftCode,
   });
 
-  // 2) On tente la mise à jour dans Seal
-  let sealResult = null;
+  // 2) Note Seal
+  let sealNoteResult = null;
   try {
-    sealResult = await updateSealSubscriptionNote({ subscriptionId, giftCode });
+    sealNoteResult = await updateSealSubscriptionNote({ subscriptionId, giftCode });
   } catch (err) {
-    console.error('[giftEngine] Erreur lors de l’update Seal:', err.message);
+    console.error('[giftEngine] Erreur update note Seal:', err.message);
   }
 
-  // ⚠️ On ne bloque pas le succès UI même si Seal a raté,
-  // mais on garde l’info dans sealResult pour debug.
+  // 3) Items Seal (vrai pod cadeau)
+  let sealItemsResult = null;
+  try {
+    sealItemsResult = await updateSealSubscriptionGiftItems({ subscriptionId, giftCode });
+  } catch (err) {
+    console.error('[giftEngine] Erreur update items Seal:', err.message);
+  }
+
   return {
     success: true,
     data: {
       ...record,
-      sealResult,
+      sealNoteResult,
+      sealItemsResult,
     },
   };
 }
+
 
 module.exports = {
   applyGiftChange,
