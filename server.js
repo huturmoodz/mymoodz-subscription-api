@@ -136,19 +136,21 @@ app.get('/subscriptions-for-customer', async (req, res) => {
     }
 
 
-    const simplified = subsRaw.map((s) => ({
-      id: s.id,
-      status: s.status,
-      email: s.email,
-      total_value: s.total_value,
-      items: (s.items || []).map((item) => ({
-        id: item.id,
-        title: item.title,
-        variant_id: item.variant_id,
-        price: item.price,
-        quantity: item.quantity,
-      })),
-    }));
+const simplified = subsRaw.map((s) => ({
+  id: s.id,
+  status: s.status,
+  email: s.email,
+  total_value: s.total_value,
+  note_attributes: s.note_attributes || [],   // 👈 IMPORTANT
+  items: (s.items || []).map((item) => ({
+    id: item.id,
+    title: item.title,
+    variant_id: item.variant_id,
+    price: item.price,
+    quantity: item.quantity,
+  })),
+}));
+
 
     return res.json({
       ok: true,
