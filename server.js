@@ -141,7 +141,6 @@ const simplified = subsRaw.map((s) => ({
   status: s.status,
   email: s.email,
   total_value: s.total_value,
-  note_attributes: s.note_attributes || [],   // 👈 IMPORTANT
   items: (s.items || []).map((item) => ({
     id: item.id,
     title: item.title,
@@ -150,6 +149,7 @@ const simplified = subsRaw.map((s) => ({
     quantity: item.quantity,
   })),
 }));
+
 
 
     return res.json({
