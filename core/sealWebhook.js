@@ -20,9 +20,7 @@ async function callSeal(path, options) {
 
   const json = await res.json().catch(() => null);
   if (!res.ok || !json || json.success === false) {
-    const err = new Error(
-      (json && (json.message || json.error)) || `Seal error on ${path}`
-    );
+    const err = new Error((json && (json.message || json.error)) || `Seal error on ${path}`);
     err.seal = { url, status: res.status, body: json };
     throw err;
   }
@@ -37,9 +35,7 @@ function getNoteAttrValue(subscription, name) {
 }
 
 function setNoteAttr(subscription, name, value) {
-  const arr = Array.isArray(subscription.note_attributes)
-    ? [...subscription.note_attributes]
-    : [];
+  const arr = Array.isArray(subscription.note_attributes) ? [...subscription.note_attributes] : [];
   const idx = arr.findIndex((a) => a?.name === name);
   if (idx >= 0) arr[idx] = { name, value };
   else arr.push({ name, value });
@@ -48,22 +44,15 @@ function setNoteAttr(subscription, name, value) {
 
 function verifySealHmac(rawBodyBuffer, receivedHmac) {
   if (!SEAL_WEBHOOK_SECRET) {
-    // Si tu veux forcer la vérif, retire ce fallback.
     console.warn('[sealWebhook] SEAL_WEBHOOK_SECRET manquant -> skip hmac verify');
     return true;
   }
   if (!receivedHmac) return false;
 
-  const computed = crypto
-    .createHmac('sha256', SEAL_WEBHOOK_SECRET)
-    .update(rawBodyBuffer)
-    .digest('base64');
+  const computed = crypto.createHmac('sha256', SEAL_WEBHOOK_SECRET).update(rawBodyBuffer).digest('base64');
 
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(receivedHmac),
-      Buffer.from(computed)
-    );
+    return crypto.timingSafeEqual(Buffer.from(receivedHmac), Buffer.from(computed));
   } catch {
     return false;
   }
@@ -76,80 +65,43 @@ async function fetchSubscription(subscriptionId) {
 }
 
 /**
- * Ajoute un cadeau récurrent à la subscription
- * en se basant sur subscription_free_gift_variant_id (line item property remontée)
+ * Lit la property et ajoute un cadeau récurrent UNE SEULE FOIS
+ * - stop si override = 1
+ * - stop si seeded = 1
+ * - ne marque jamais seeded si property absente (created trop tôt)
  */
 async function addRecurringGiftFromProperty(subscription) {
   const subId = subscription.id;
 
-  // SAFE RULE #1 : déjà initialisé ?
-  const initialized = getNoteAttrValue(subscription, 'mymoodz_gift_initialized');
-  if (initialized === '1') {
-    console.log('[sealWebhook] Gift already initialized -> skip', subId);
-    return { skipped: true, reason: 'already_initialized' };
+  // 1) Si le client a déjà utilisé "Gérer mon cadeau" -> ne jamais toucher
+  const override = getNoteAttrValue(subscription, 'mymoodz_gift_override');
+  if (override === '1') {
+    return { skipped: true, reason: 'override_enabled' };
   }
 
-  // SAFE RULE #2 : si un client a déjà choisi un cadeau via ta page -> ne pas écraser
-  const customGift = getNoteAttrValue(subscription, 'mymoodz_free_gift_code');
-  if (customGift) {
-    console.log('[sealWebhook] Customer already has gift choice -> skip init', {
-      subId,
-      customGift,
-    });
-
-    // on marque initialisé quand même pour éviter re-triggers
-    const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_initialized', '1');
-    await callSeal('/subscription', {
-      method: 'PUT',
-      body: JSON.stringify({
-        id: Number(subId),
-        action: 'edit',
-        edit: { note_attributes: newAttrs },
-      }),
-    });
-
-    return { skipped: true, reason: 'customer_already_chosen_gift' };
+  // 2) Anti-doublon (une fois)
+  const seeded = getNoteAttrValue(subscription, 'mymoodz_gift_seeded');
+  if (seeded === '1') {
+    return { skipped: true, reason: 'already_seeded' };
   }
 
-  // récupérer la variant id cadeau depuis property
+  // 3) Trouver subscription_free_gift_variant_id dans les properties des items
+  const items = subscription.items || [];
   const giftVariantId =
-    subscription?.items?.[0]?.properties?.find(
-      (p) => p?.key === 'subscription_free_gift_variant_id'
-    )?.value ||
-    // OU parfois Seal renvoie properties comme array d'objets {key,value} sur item parent
-    subscription?.items?.find((it) => it?.properties?.length)?.properties?.find(
-      (p) => p?.key === 'subscription_free_gift_variant_id'
-    )?.value ||
+    items?.[0]?.properties?.find((p) => p?.key === 'subscription_free_gift_variant_id')?.value ||
+    items
+      .find((it) => Array.isArray(it.properties) && it.properties.length)
+      ?.properties?.find((p) => p?.key === 'subscription_free_gift_variant_id')?.value ||
     null;
 
   if (!giftVariantId) {
-    console.warn('[sealWebhook] No subscription_free_gift_variant_id found', subId);
-
-    // on marque initialisé pour éviter boucle
-    const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_initialized', '1');
-    await callSeal('/subscription', {
-      method: 'PUT',
-      body: JSON.stringify({
-        id: Number(subId),
-        action: 'edit',
-        edit: { note_attributes: newAttrs },
-      }),
-    });
-
-    return { skipped: true, reason: 'no_property' };
+    return { skipped: true, reason: 'no_property_yet' };
   }
 
-  // SAFE RULE #3 : ne pas ajouter si déjà présent dans les items
-  const alreadyInItems = (subscription.items || []).some(
-    (it) => String(it.variant_id) === String(giftVariantId)
-  );
+  // 4) Si déjà présent, on seed quand même
+  const alreadyInItems = items.some((it) => String(it.variant_id) === String(giftVariantId));
   if (alreadyInItems) {
-    console.log('[sealWebhook] Gift variant already present in subscription', {
-      subId,
-      giftVariantId,
-    });
-
-    const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_initialized', '1');
+    const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_seeded', '1');
     await callSeal('/subscription', {
       method: 'PUT',
       body: JSON.stringify({
@@ -158,31 +110,20 @@ async function addRecurringGiftFromProperty(subscription) {
         edit: { note_attributes: newAttrs },
       }),
     });
-
-    return { skipped: true, reason: 'already_present' };
+    return { skipped: true, reason: 'already_present_seeded', giftVariantId: String(giftVariantId) };
   }
 
-  // On a besoin des infos produit pour add_items : à défaut on envoie "minimal safe"
-  // (Seal accepte en général variant_id + quantity + one_time, mais on garde plus de champs)
+  // 5) Ajouter cadeau récurrent
   const giftItem = {
-    product_id: '', // optionnel mais safe si tu le connais; on laisse vide si inconnu
     variant_id: String(giftVariantId),
     quantity: '1',
-    title: 'Cadeau MyMOODz', // fallback
-    sku: null,
+    title: 'Cadeau MyMOODz',
     price: '0.00',
     taxable: 0,
     requires_shipping: 1,
     one_time: 0, // ✅ récurrent
-    total_discount: 0,
-    subsc_discount_percent: 0,
     properties: [],
   };
-
-  console.log('[sealWebhook] Adding recurring gift to subscription', {
-    subId,
-    giftVariantId,
-  });
 
   await callSeal('/subscription', {
     method: 'PUT',
@@ -193,8 +134,8 @@ async function addRecurringGiftFromProperty(subscription) {
     }),
   });
 
-  // Marquer initialisé
-  const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_initialized', '1');
+  // 6) Marquer seedé après succès
+  const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_seeded', '1');
   await callSeal('/subscription', {
     method: 'PUT',
     body: JSON.stringify({
@@ -207,8 +148,32 @@ async function addRecurringGiftFromProperty(subscription) {
   return { added: true, giftVariantId: String(giftVariantId) };
 }
 
+/**
+ * ✅ Retry: Seal peut envoyer "created" avant d'avoir les properties.
+ * On refetch 3 fois max.
+ */
+async function addRecurringGiftFromPropertyWithRetry(initialSubscription, attempts = 3, delayMs = 1200) {
+  let last = null;
+
+  for (let i = 0; i < attempts; i++) {
+    const sub = i === 0 ? initialSubscription : await fetchSubscription(initialSubscription.id);
+    last = await addRecurringGiftFromProperty(sub);
+
+    if (last?.reason === 'no_property_yet') {
+      // attendre puis réessayer
+      await new Promise((r) => setTimeout(r, delayMs));
+      continue;
+    }
+
+    return last;
+  }
+
+  return { skipped: true, reason: 'no_property_after_retries', last };
+}
+
 module.exports = {
   verifySealHmac,
   fetchSubscription,
   addRecurringGiftFromProperty,
+  addRecurringGiftFromPropertyWithRetry,
 };
