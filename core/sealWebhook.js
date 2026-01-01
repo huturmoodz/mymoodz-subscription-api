@@ -4,6 +4,10 @@ const crypto = require('crypto');
 const SEAL_API_TOKEN = process.env.SEAL_API_TOKEN;
 const SEAL_WEBHOOK_SECRET = process.env.SEAL_WEBHOOK_SECRET;
 const SEAL_BASE_URL = 'https://app.sealsubscriptions.com/shopify/merchant/api';
+const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
+const SHOPIFY_ADMIN_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
+
 
 async function callSeal(path, options) {
   if (!SEAL_API_TOKEN) throw new Error('SEAL_API_TOKEN manquant');
@@ -27,6 +31,37 @@ async function callSeal(path, options) {
 
   return json;
 }
+
+async function fetchShopifyVariantInfo(variantId) {
+  if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_ACCESS_TOKEN) {
+    throw new Error('Shopify env missing (SHOPIFY_STORE_DOMAIN / SHOPIFY_ADMIN_ACCESS_TOKEN)');
+  }
+
+  const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/variants/${variantId}.json`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-Shopify-Access-Token': SHOPIFY_ADMIN_ACCESS_TOKEN,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const json = await res.json().catch(() => null);
+
+  if (!res.ok || !json?.variant) {
+    const err = new Error(`Shopify variant lookup failed for ${variantId}`);
+    err.shopify = { url, status: res.status, body: json };
+    throw err;
+  }
+
+  return {
+    product_id: String(json.variant.product_id),
+    title: String(json.variant.title || ''),
+    sku: json.variant.sku ? String(json.variant.sku) : null,
+  };
+}
+
 
 function getNoteAttrValue(subscription, name) {
   const arr = subscription?.note_attributes || [];
@@ -123,16 +158,23 @@ async function addRecurringGiftFromProperty(subscription) {
   }
 
   // 5) Ajouter cadeau récurrent
-  const giftItem = {
-    variant_id: String(giftVariantId),
-    quantity: '1',
-    title: 'Cadeau MyMOODz',
-    price: '0.00',
-    taxable: 0,
-    requires_shipping: 1,
-    one_time: 0, // ✅ récurrent
-    properties: [],
-  };
+const variantInfo = await fetchShopifyVariantInfo(giftVariantId);
+
+const giftItem = {
+  product_id: variantInfo.product_id,      // ✅ obligatoire pour Seal
+  variant_id: String(giftVariantId),
+  quantity: '1',
+  title: variantInfo.title || 'Cadeau MyMOODz',
+  sku: variantInfo.sku,
+  price: '0.00',
+  taxable: 0,
+  requires_shipping: 1,
+  one_time: 0, // ✅ récurrent
+  total_discount: 0,
+  subsc_discount_percent: 0,
+  properties: [],
+};
+
 
   await callSeal('/subscription', {
     method: 'PUT',
