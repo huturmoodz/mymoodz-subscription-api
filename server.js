@@ -33,7 +33,7 @@ app.use(
  */
 app.post(
   '/webhooks/seal/subscription-created',
-  express.raw({ type: 'application/json' }),
+  express.raw({ type: '*/*' }),
   async (req, res) => {
     // ✅ ACK DIRECT
     res.status(200).send('ok');
