@@ -44,19 +44,28 @@ function setNoteAttr(subscription, name, value) {
 
 function verifySealHmac(rawBodyBuffer, receivedHmac) {
   if (!SEAL_WEBHOOK_SECRET) {
-    console.warn('[sealWebhook] SEAL_WEBHOOK_SECRET manquant -> skip hmac verify');
+    console.warn('[sealWebhook] SEAL_WEBHOOK_SECRET missing -> skip verify (DEV ONLY)');
     return true;
   }
-  if (!receivedHmac) return false;
 
-  const computed = crypto.createHmac('sha256', SEAL_WEBHOOK_SECRET).update(rawBodyBuffer).digest('base64');
+  if (!receivedHmac || !rawBodyBuffer) return false;
 
-  try {
-    return crypto.timingSafeEqual(Buffer.from(receivedHmac), Buffer.from(computed));
-  } catch {
-    return false;
-  }
+  // HMAC SHA256 over RAW JSON body
+  const digest = crypto
+    .createHmac('sha256', SEAL_WEBHOOK_SECRET)
+    .update(rawBodyBuffer)
+    .digest(); // <-- Buffer (bytes)
+
+  // Seal may send base64 or hex. Detect format.
+  const isHex = /^[0-9a-fA-F]+$/.test(receivedHmac) && receivedHmac.length >= 64;
+  const received = Buffer.from(receivedHmac, isHex ? 'hex' : 'base64');
+
+  // timingSafeEqual requires same length
+  if (received.length !== digest.length) return false;
+
+  return crypto.timingSafeEqual(received, digest);
 }
+
 
 async function fetchSubscription(subscriptionId) {
   const idNumber = Number(subscriptionId);
