@@ -55,7 +55,8 @@ app.post(
 
       // ✅ Retries pour attendre que Seal ait bien attaché items/properties
       const fullSub = await fetchSubscription(subscriptionId);
-      const result = await addRecurringGiftFromPropertyWithRetry(fullSub);
+      const result = await addRecurringGiftFromPropertyWithRetry(fullSub, 6, 1500);
+
 
       console.log('[seal webhook] Done', { subscriptionId, result });
     } catch (err) {
