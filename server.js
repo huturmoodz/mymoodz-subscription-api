@@ -182,6 +182,12 @@ app.post('/change-gift', async (req, res) => {
   }
 });
 
+
+app.get('/health', (req, res) => {
+  res.status(200).send('ok');
+});
+
+
 app.listen(PORT, () => {
   console.log(`MyMoodz subscription API running on port ${PORT}`);
 });
