@@ -184,8 +184,10 @@ app.post('/change-gift', async (req, res) => {
 
 
 app.get('/health', (req, res) => {
+  console.log('[health] ping', new Date().toISOString());
   res.status(200).send('ok');
 });
+
 
 
 app.listen(PORT, () => {
