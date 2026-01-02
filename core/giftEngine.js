@@ -1,14 +1,11 @@
 // core/giftEngine.js
-
 const { saveGiftChoice } = require('./customerGifts');
 
 const SEAL_API_TOKEN = process.env.SEAL_API_TOKEN;
-const SEAL_BASE_URL =
-  'https://app.sealsubscriptions.com/shopify/merchant/api';
+const SEAL_BASE_URL = 'https://app.sealsubscriptions.com/shopify/merchant/api';
 
 /**
  * Mapping des cadeaux -> produits/variantes Shopify vus par Seal
- * (IDs que tu as déjà remplis)
  */
 const GIFT_VARIANTS = {
   pod_bonne_nuit: {
@@ -21,38 +18,15 @@ const GIFT_VARIANTS = {
     product_id: '10297464586581',
     variant_id: '52166742147413',
     title: 'PODS Zéro - 1 Mois',
-    sku: 'BE1',
+    sku: 'ZERO1',
   },
   pod_bien_etre: {
     product_id: '10297464586581',
     variant_id: '52166741197141',
     title: 'PODS Bien-être - 1 Mois',
-    sku: 'ZERO1',
+    sku: 'BE1',
   },
 };
-
-function mergeNoteAttributes(existing = [], toUpsert = []) {
-  const map = new Map(existing.map(a => [String(a.name), { name: String(a.name), value: String(a.value ?? "") }]));
-  for (const a of toUpsert) {
-    map.set(String(a.name), { name: String(a.name), value: String(a.value ?? "") });
-  }
-  return Array.from(map.values());
-}
-
-async function editNoteAttributesMerge(subscriptionId, attrsToUpsert) {
-  const sub = await fetchSubscription(subscriptionId);
-  const merged = mergeNoteAttributes(sub.note_attributes || [], attrsToUpsert);
-
-  return callSeal("/subscription", {
-    method: "PUT",
-    body: JSON.stringify({
-      id: Number(subscriptionId),
-      action: "edit",
-      edit: { note_attributes: merged },
-    }),
-  });
-}
-
 
 // Pour reconnaître tous les items cadeau déjà présents dans l’abonnement
 const GIFT_VARIANT_ID_SET = new Set(
@@ -62,78 +36,87 @@ const GIFT_VARIANT_ID_SET = new Set(
 /* ------------------ Helpers Seal ------------------ */
 
 async function callSeal(path, options) {
-  if (!SEAL_API_TOKEN) {
-    throw new Error('SEAL_API_TOKEN manquant');
-  }
+  if (!SEAL_API_TOKEN) throw new Error('SEAL_API_TOKEN manquant');
 
   const url = `${SEAL_BASE_URL}${path}`;
-
   const res = await fetch(url, {
     ...(options || {}),
     headers: {
       'Content-Type': 'application/json',
       'X-Seal-Token': SEAL_API_TOKEN,
-      ...(options && options.headers),
+      ...(options?.headers || {}),
     },
   });
 
-  let json = null;
-  try {
-    json = await res.json();
-  } catch (e) {
-    console.error('[giftEngine] Réponse Seal non-JSON', url);
-  }
+  const json = await res.json().catch(() => null);
 
   if (!res.ok || !json || json.success === false) {
     const err = new Error(
-      (json && json.message) ||
-        (json && json.error) ||
-        `Seal error on ${path}`
+      (json && (json.message || json.error)) || `Seal error on ${path}`
     );
-    err.seal = {
-      url,
-      status: res.status,
-      body: json,
-    };
-    console.error('[giftEngine] Erreur Seal', err.seal);
+    err.seal = { url, status: res.status, body: json };
     throw err;
   }
 
   return json;
 }
 
-/**
- * Récupère la subscription complète (endpoint /subscription)
- */
 async function fetchSubscription(subscriptionId) {
   const idNumber = Number(subscriptionId);
-  const json = await callSeal(`/subscription?id=${idNumber}`, {
-    method: 'GET',
-  });
-
+  const json = await callSeal(`/subscription?id=${idNumber}`, { method: 'GET' });
   return json.payload || json;
 }
 
-/**
- * Met à jour la note mymoodz_free_gift_code sur la subscription
- */
+/* ------------------ Notes merge (anti écrasement) ------------------ */
+
+function mergeNoteAttributes(existing = [], toUpsert = []) {
+  const map = new Map(
+    existing.map((a) => [
+      String(a.name),
+      { name: String(a.name), value: String(a.value ?? '') },
+    ])
+  );
+
+  for (const a of toUpsert) {
+    map.set(String(a.name), {
+      name: String(a.name),
+      value: String(a.value ?? ''),
+    });
+  }
+
+  return Array.from(map.values());
+}
+
+async function editNoteAttributesMerge(subscriptionId, attrsToUpsert) {
+  const sub = await fetchSubscription(subscriptionId);
+  const merged = mergeNoteAttributes(sub.note_attributes || [], attrsToUpsert);
+
+  return callSeal('/subscription', {
+    method: 'PUT',
+    body: JSON.stringify({
+      id: Number(subscriptionId),
+      action: 'edit',
+      edit: { note_attributes: merged },
+    }),
+  });
+}
+
 async function updateNoteAttribute(subscriptionId, giftCode) {
   return editNoteAttributesMerge(subscriptionId, [
-    { name: "mymoodz_free_gift_code", value: giftCode },
+    { name: 'mymoodz_free_gift_code', value: giftCode },
   ]);
 }
 
-
-/**
- * Supprime tous les items cadeau de la subscription
- */
-async function removeExistingGiftItems(subscription) {
 async function setGiftOverride(subscriptionId) {
   return editNoteAttributesMerge(subscriptionId, [
-    { name: "mymoodz_gift_override", value: "1" },
+    { name: 'mymoodz_gift_override', value: '1' },
   ]);
 }
 
+/* ------------------ Items gifts ------------------ */
+
+async function removeExistingGiftItems(subscription) {
+  const items = subscription.items || [];
   const toRemoveIds = items
     .filter((it) => GIFT_VARIANT_ID_SET.has(String(it.variant_id)))
     .map((it) => it.id);
@@ -157,10 +140,6 @@ async function setGiftOverride(subscriptionId) {
   return toRemoveIds;
 }
 
-/**
- * Construit l’item cadeau à ajouter
- * → on colle au format de la doc, avec le max de champs safe
- */
 function buildGiftItem(giftCode) {
   const cfg = GIFT_VARIANTS[giftCode];
   if (!cfg) return null;
@@ -171,19 +150,16 @@ function buildGiftItem(giftCode) {
     quantity: '1',
     title: cfg.title,
     sku: cfg.sku,
-    price: '0.00',               // string, comme dans leur exemple
+    price: '0.00',
     taxable: 0,
     requires_shipping: 1,
-    one_time: 1,                 // cadeau one-shot pour ce cycle
+    one_time: 0, // ✅ RÉCURRENT (si tu veux récurrent via gérer mon cadeau aussi)
     total_discount: 0,
     subsc_discount_percent: 0,
     properties: [],
   };
 }
 
-/**
- * Ajoute le nouvel item cadeau via action: "add_items"
- */
 async function addGiftItem(subscriptionId, giftCode) {
   const item = buildGiftItem(giftCode);
   if (!item) {
@@ -193,45 +169,34 @@ async function addGiftItem(subscriptionId, giftCode) {
 
   console.log('[giftEngine] Ajout du cadeau', { subscriptionId, item });
 
-  const idNumber = Number(subscriptionId);
-
-  const res = await callSeal('/subscription', {
+  return callSeal('/subscription', {
     method: 'PUT',
     body: JSON.stringify({
-      id: idNumber,
+      id: Number(subscriptionId),
       action: 'add_items',
       add_items: [item],
     }),
   });
-
-  return res;
 }
 
-/* ------------------ Fonction principale ------------------ */
+/* ------------------ Main ------------------ */
 
 async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
   if (!subscriptionId || !giftCode) {
     throw new Error('subscriptionId et giftCode sont obligatoires');
   }
 
-  // 0) Trace côté serveur (debug + backup)
   const record = saveGiftChoice({
     subscriptionId,
     customerId: customerEmail || null,
     giftCode,
+    updatedAt: new Date().toISOString(),
   });
 
   if (!SEAL_API_TOKEN) {
-    console.warn(
-      '[giftEngine] SEAL_API_TOKEN manquant, on ne touche pas à Seal.'
-    );
     return {
       success: true,
-      data: {
-        ...record,
-        sealNoteUpdated: false,
-        sealItemsUpdated: false,
-      },
+      data: { ...record, sealNoteUpdated: false, sealItemsUpdated: false },
     };
   }
 
@@ -239,42 +204,28 @@ async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
   let removedIds = [];
   let addResult = null;
   let noteResult = null;
+  let overrideResult = null;
 
   try {
-    // 1) Récupérer la subscription complète
     subscription = await fetchSubscription(subscriptionId);
-
-    // 2) Retirer tous les anciens cadeaux
     removedIds = await removeExistingGiftItems(subscription);
-
-    // 3) Ajouter le nouveau cadeau
     addResult = await addGiftItem(subscriptionId, giftCode);
 
-    // 4) Mettre à jour la note
     noteResult = await updateNoteAttribute(subscriptionId, giftCode);
+    overrideResult = await setGiftOverride(subscriptionId); // ✅ bloque tout reset par webhook
+
   } catch (err) {
     console.error('[giftEngine] Erreur applyGiftChange', err);
-
     return {
       success: false,
       error: err.message || 'Erreur lors de la mise à jour du cadeau',
-      data: {
-        ...record,
-        removedIds,
-        subscriptionId,
-        sealError: err.seal || null, // 👈 très important pour debug
-      },
+      data: { ...record, removedIds, subscriptionId, sealError: err.seal || null },
     };
   }
 
   return {
     success: true,
-    data: {
-      ...record,
-      removedIds,
-      addResult,
-      noteResult,
-    },
+    data: { ...record, removedIds, addResult, noteResult, overrideResult },
   };
 }
 
