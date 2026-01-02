@@ -8,7 +8,34 @@ const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_ADMIN_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
 
+// ---- Mapping "en dur" variant_id -> infos nécessaires pour Seal add_items ----
+// IMPORTANT : Seal exige product_id pour add_items
+const GIFT_VARIANTS_BY_ID = {
+  // Bonnes Nuits - 1 mois
+  "52030628725077": {
+    product_id: "10297464586581",
+    variant_id: "52030628725077",
+    title: "PODS Bonnes Nuits - 1 Mois",
+    sku: "BN1",
+  },
 
+  // Zéro - 1 semaine
+  "52166742147413": {
+    product_id: "10297464586581",
+    variant_id: "52166742147413",
+    title: "PODS Zéro - 1 Mois",
+    sku: "ZERO1",
+  },
+
+  // Bien-être - 1 mois
+  "52166741197141": {
+    product_id: "10297464586581",
+    variant_id: "52166741197141",
+    title: "PODS Bien-être - 1 Mois",
+    sku: "BE1",
+  },
+};
+ 
 async function callSeal(path, options) {
   if (!SEAL_API_TOKEN) throw new Error('SEAL_API_TOKEN manquant');
 
@@ -160,13 +187,36 @@ async function addRecurringGiftFromProperty(subscription) {
   // 5) Ajouter cadeau récurrent
 const variantInfo = await fetchShopifyVariantInfo(giftVariantId);
 
+const giftVariantIdStr = String(giftVariantId);
+const cfg = GIFT_VARIANTS_BY_ID[giftVariantIdStr];
+
+if (!cfg) {
+  console.error("[sealWebhook] giftVariantId not in mapping -> cannot add", {
+    subId,
+    giftVariantId: giftVariantIdStr,
+  });
+
+  // On marque initialisé pour éviter spam webhook, MAIS tu peux décider de ne pas le faire
+  const newAttrs = setNoteAttr(subscription, "mymoodz_gift_initialized", "1");
+  await callSeal("/subscription", {
+    method: "PUT",
+    body: JSON.stringify({
+      id: Number(subId),
+      action: "edit",
+      edit: { note_attributes: newAttrs },
+    }),
+  });
+
+  return { skipped: true, reason: "gift_variant_not_mapped", giftVariantId: giftVariantIdStr };
+}
+
 const giftItem = {
-  product_id: variantInfo.product_id,      // ✅ obligatoire pour Seal
-  variant_id: String(giftVariantId),
-  quantity: '1',
-  title: variantInfo.title || 'Cadeau MyMOODz',
-  sku: variantInfo.sku,
-  price: '0.00',
+  product_id: String(cfg.product_id),
+  variant_id: String(cfg.variant_id),
+  quantity: "1",
+  title: cfg.title,
+  sku: cfg.sku,
+  price: "0.00",
   taxable: 0,
   requires_shipping: 1,
   one_time: 0, // ✅ récurrent
@@ -174,6 +224,7 @@ const giftItem = {
   subsc_discount_percent: 0,
   properties: [],
 };
+
 
 
   await callSeal('/subscription', {
