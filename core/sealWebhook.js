@@ -59,36 +59,6 @@ async function callSeal(path, options) {
   return json;
 }
 
-async function fetchShopifyVariantInfo(variantId) {
-  if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_ACCESS_TOKEN) {
-    throw new Error('Shopify env missing (SHOPIFY_STORE_DOMAIN / SHOPIFY_ADMIN_ACCESS_TOKEN)');
-  }
-
-  const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/variants/${variantId}.json`;
-
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'X-Shopify-Access-Token': SHOPIFY_ADMIN_ACCESS_TOKEN,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  const json = await res.json().catch(() => null);
-
-  if (!res.ok || !json?.variant) {
-    const err = new Error(`Shopify variant lookup failed for ${variantId}`);
-    err.shopify = { url, status: res.status, body: json };
-    throw err;
-  }
-
-  return {
-    product_id: String(json.variant.product_id),
-    title: String(json.variant.title || ''),
-    sku: json.variant.sku ? String(json.variant.sku) : null,
-  };
-}
-
 
 function getNoteAttrValue(subscription, name) {
   const arr = subscription?.note_attributes || [];
@@ -185,7 +155,6 @@ async function addRecurringGiftFromProperty(subscription) {
   }
 
   // 5) Ajouter cadeau récurrent
-const variantInfo = await fetchShopifyVariantInfo(giftVariantId);
 
 const giftVariantIdStr = String(giftVariantId);
 const cfg = GIFT_VARIANTS_BY_ID[giftVariantIdStr];
@@ -197,7 +166,8 @@ if (!cfg) {
   });
 
   // On marque initialisé pour éviter spam webhook, MAIS tu peux décider de ne pas le faire
-  const newAttrs = setNoteAttr(subscription, "mymoodz_gift_initialized", "1");
+  const newAttrs = setNoteAttr(subscription, "mymoodz_gift_seeded", "1");
+
   await callSeal("/subscription", {
     method: "PUT",
     body: JSON.stringify({
