@@ -31,6 +31,29 @@ const GIFT_VARIANTS = {
   },
 };
 
+function mergeNoteAttributes(existing = [], toUpsert = []) {
+  const map = new Map(existing.map(a => [String(a.name), { name: String(a.name), value: String(a.value ?? "") }]));
+  for (const a of toUpsert) {
+    map.set(String(a.name), { name: String(a.name), value: String(a.value ?? "") });
+  }
+  return Array.from(map.values());
+}
+
+async function editNoteAttributesMerge(subscriptionId, attrsToUpsert) {
+  const sub = await fetchSubscription(subscriptionId);
+  const merged = mergeNoteAttributes(sub.note_attributes || [], attrsToUpsert);
+
+  return callSeal("/subscription", {
+    method: "PUT",
+    body: JSON.stringify({
+      id: Number(subscriptionId),
+      action: "edit",
+      edit: { note_attributes: merged },
+    }),
+  });
+}
+
+
 // Pour reconnaître tous les items cadeau déjà présents dans l’abonnement
 const GIFT_VARIANT_ID_SET = new Set(
   Object.values(GIFT_VARIANTS).map((g) => String(g.variant_id))
@@ -95,30 +118,22 @@ async function fetchSubscription(subscriptionId) {
  * Met à jour la note mymoodz_free_gift_code sur la subscription
  */
 async function updateNoteAttribute(subscriptionId, giftCode) {
-  const idNumber = Number(subscriptionId);
-
-  return callSeal('/subscription', {
-    method: 'PUT',
-    body: JSON.stringify({
-      id: idNumber,
-      action: 'edit',
-      edit: {
-        note_attributes: [
-          {
-            name: 'mymoodz_free_gift_code',
-            value: giftCode,
-          },
-        ],
-      },
-    }),
-  });
+  return editNoteAttributesMerge(subscriptionId, [
+    { name: "mymoodz_free_gift_code", value: giftCode },
+  ]);
 }
+
 
 /**
  * Supprime tous les items cadeau de la subscription
  */
 async function removeExistingGiftItems(subscription) {
-  const items = subscription.items || [];
+async function setGiftOverride(subscriptionId) {
+  return editNoteAttributesMerge(subscriptionId, [
+    { name: "mymoodz_gift_override", value: "1" },
+  ]);
+}
+
   const toRemoveIds = items
     .filter((it) => GIFT_VARIANT_ID_SET.has(String(it.variant_id)))
     .map((it) => it.id);
