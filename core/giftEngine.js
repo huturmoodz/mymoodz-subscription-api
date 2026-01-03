@@ -28,6 +28,54 @@ const GIFT_VARIANTS = {
   },
 };
 
+
+
+// --- Diffuseur (one-shot) ---
+const DIFFUSER_PRODUCT_ID = "10299097940309";
+
+const DIFFUSER_VARIANT_ID_SET = new Set([
+  "52035074490709",
+  "52143411888469",
+  "52143425159509",
+  "52143425225045",
+  "52143426175317",
+  "52143426404693",
+]);
+
+const POD_VARIANT_ID_SET = new Set([
+  "52030628725077", // BN
+  "52166742147413", // ZERO
+  "52166741197141", // BE
+]);
+
+function getNoteAttrValue(subscription, name) {
+  const arr = subscription?.note_attributes || [];
+  const found = arr.find((a) => a?.name === name);
+  return found ? String(found.value ?? "") : "";
+}
+
+// Trouve le POD récurrent actuel dans les items (si présent)
+function findCurrentRecurringPodVariantId(subscription) {
+  const items = subscription?.items || [];
+  const pod = items.find((it) => POD_VARIANT_ID_SET.has(String(it.variant_id)));
+  return pod ? String(pod.variant_id) : null;
+}
+
+function isDiffuserGiftCode(giftCode) {
+  // on considère que giftCode peut être:
+  // - un variantId direct (ex: "52035074490709")
+  // - ou "diffuser:52035074490709"
+  const v = String(giftCode || "").trim();
+  const variantId = v.includes(":") ? v.split(":")[1] : v;
+  return DIFFUSER_VARIANT_ID_SET.has(String(variantId));
+}
+
+function extractDiffuserVariantIdFromGiftCode(giftCode) {
+  const v = String(giftCode || "").trim();
+  return v.includes(":") ? v.split(":")[1] : v;
+}
+
+
 // Pour reconnaître tous les items cadeau déjà présents dans l’abonnement
 const GIFT_VARIANT_ID_SET = new Set(
   Object.values(GIFT_VARIANTS).map((g) => String(g.variant_id))
@@ -141,24 +189,48 @@ async function removeExistingGiftItems(subscription) {
 }
 
 function buildGiftItem(giftCode) {
+  // --- POD (récurent) via mapping existant ---
   const cfg = GIFT_VARIANTS[giftCode];
-  if (!cfg) return null;
+  if (cfg) {
+    return {
+      product_id: String(cfg.product_id),
+      variant_id: String(cfg.variant_id),
+      quantity: "1",
+      title: cfg.title,
+      sku: cfg.sku,
+      price: "0.00",
+      taxable: 0,
+      requires_shipping: 1,
+      one_time: 0, // ✅ POD = récurrent
+      total_discount: 0,
+      subsc_discount_percent: 0,
+      properties: [],
+    };
+  }
 
-  return {
-    product_id: String(cfg.product_id),
-    variant_id: String(cfg.variant_id),
-    quantity: '1',
-    title: cfg.title,
-    sku: cfg.sku,
-    price: '0.00',
-    taxable: 0,
-    requires_shipping: 1,
-    one_time: 0, // ✅ RÉCURRENT (si tu veux récurrent via gérer mon cadeau aussi)
-    total_discount: 0,
-    subsc_discount_percent: 0,
-    properties: [],
-  };
+  // --- Diffuseur (one-shot) ---
+  if (isDiffuserGiftCode(giftCode)) {
+    const diffuserVariantId = extractDiffuserVariantIdFromGiftCode(giftCode);
+
+    return {
+      product_id: String(DIFFUSER_PRODUCT_ID),
+      variant_id: String(diffuserVariantId),
+      quantity: "1",
+      title: "Diffuseur (cadeau)",
+      sku: "DIFFUSER_GIFT",
+      price: "0.00",
+      taxable: 0,
+      requires_shipping: 1,
+      one_time: 1, // ✅ DIFFUSEUR = one-shot (prochain cycle uniquement)
+      total_discount: 0,
+      subsc_discount_percent: 0,
+      properties: [],
+    };
+  }
+
+  return null;
 }
+
 
 async function addGiftItem(subscriptionId, giftCode) {
   const item = buildGiftItem(giftCode);
@@ -208,8 +280,41 @@ async function applyGiftChange({ subscriptionId, customerEmail, giftCode }) {
 
   try {
     subscription = await fetchSubscription(subscriptionId);
+        // --- Sauvegarde du POD récurrent actuel avant changement ---
+    const currentPodVariantId = findCurrentRecurringPodVariantId(subscription);
+
+    // si on a un POD, on le garde en mémoire (pour revert après one-shot)
+    if (currentPodVariantId) {
+      await editNoteAttributesMerge(subscriptionId, [
+        { name: "mymoodz_last_pod_variant_id", value: currentPodVariantId },
+      ]);
+    }
+
     removedIds = await removeExistingGiftItems(subscription);
     addResult = await addGiftItem(subscriptionId, giftCode);
+
+        // --- Si diffuseur choisi => one-shot pending ---
+    if (isDiffuserGiftCode(giftCode)) {
+      const diffuserVariantId = extractDiffuserVariantIdFromGiftCode(giftCode);
+
+      await editNoteAttributesMerge(subscriptionId, [
+        { name: "mymoodz_one_shot_pending", value: "1" },
+        { name: "mymoodz_one_shot_type", value: "diffuser" },
+        { name: "mymoodz_one_shot_diffuser_variant_id", value: String(diffuserVariantId) },
+      ]);
+    } else {
+      // Si POD choisi => pas de one-shot en attente
+      await editNoteAttributesMerge(subscriptionId, [
+        { name: "mymoodz_one_shot_pending", value: "0" },
+        { name: "mymoodz_one_shot_type", value: "" },
+        { name: "mymoodz_one_shot_diffuser_variant_id", value: "" },
+        // on peut aussi mettre à jour last_pod sur le POD choisi
+        ...(GIFT_VARIANTS[giftCode]?.variant_id
+          ? [{ name: "mymoodz_last_pod_variant_id", value: String(GIFT_VARIANTS[giftCode].variant_id) }]
+          : []),
+      ]);
+    }
+
 
     noteResult = await updateNoteAttribute(subscriptionId, giftCode);
     overrideResult = await setGiftOverride(subscriptionId); // ✅ bloque tout reset par webhook
