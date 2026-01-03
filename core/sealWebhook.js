@@ -14,6 +14,17 @@ const DIFFUSER_PRODUCT_ID_SET = new Set([
   "10299097940309",
 ]);
 
+// 👇 Variant IDs du diffuseur (pour détecter même si Seal ne met pas l'item dans subscription.items)
+const DIFFUSER_VARIANT_ID_SET = new Set([
+  "52035074490709",
+  "52143411888469",
+  "52143425159509",
+  "52143425225045",
+  "52143426175317",
+  "52143426404693",
+]);
+
+
 // 👇 Mapping saveur abonnement -> POD 1 mois à seed en récurrence
 const POD_VARIANT_BY_FLAVOR = {
   BN: "52030628725077",
@@ -178,21 +189,27 @@ async function addRecurringGiftFromProperty(subscription) {
   // 🎯 Si le cadeau est un DIFFUSEUR → on seed un POD selon la saveur
   let effectiveVariantId = giftVariantIdStr;
 
-  if (giftProductId && DIFFUSER_PRODUCT_ID_SET.has(giftProductId)) {
-    const fallbackPodVariant =
-      POD_VARIANT_BY_FLAVOR[String(flavorCode || "").toUpperCase()];
+const isDiffuserGift =
+  DIFFUSER_VARIANT_ID_SET.has(giftVariantIdStr) ||
+  (giftProductId && DIFFUSER_PRODUCT_ID_SET.has(giftProductId));
 
-    if (!fallbackPodVariant) {
-      return {
-        skipped: true,
-        reason: "diffuser_but_no_flavor_mapping",
-        giftVariantId: giftVariantIdStr,
-        flavorCode,
-      };
-    }
+if (isDiffuserGift) {
+  const fallbackPodVariant =
+    POD_VARIANT_BY_FLAVOR[String(flavorCode || "").toUpperCase()];
 
-    effectiveVariantId = String(fallbackPodVariant);
+  if (!fallbackPodVariant) {
+    return {
+      skipped: true,
+      reason: "diffuser_but_no_flavor_mapping",
+      giftVariantId: giftVariantIdStr,
+      flavorCode,
+      giftProductId,
+    };
   }
+
+  effectiveVariantId = String(fallbackPodVariant);
+}
+
 
   // ✅ Sécurité anti-doublon sur le POD effectif
   const alreadyInItems = items.some(
@@ -219,25 +236,18 @@ async function addRecurringGiftFromProperty(subscription) {
 
   const cfg = GIFT_VARIANTS_BY_ID[effectiveVariantId];
 
-  if (!cfg) {
-    const newAttrs = setNoteAttr(subscription, "mymoodz_gift_seeded", "1");
+if (!cfg) {
+  // ⚠️ Ne PAS marquer seeded ici, sinon on bloque à vie
+  return {
+    skipped: true,
+    reason: "gift_variant_not_mapped",
+    giftVariantId: giftVariantIdStr,
+    effectiveVariantId,
+    flavorCode,
+    giftProductId,
+  };
+}
 
-    await callSeal("/subscription", {
-      method: "PUT",
-      body: JSON.stringify({
-        id: Number(subId),
-        action: "edit",
-        edit: { note_attributes: newAttrs },
-      }),
-    });
-
-    return {
-      skipped: true,
-      reason: "gift_variant_not_mapped",
-      giftVariantId: giftVariantIdStr,
-      effectiveVariantId,
-    };
-  }
 
   const giftItem = {
     product_id: String(cfg.product_id),
