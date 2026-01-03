@@ -8,6 +8,20 @@ const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_ADMIN_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
 
+
+// 👇 Product ID du diffuseur essentiel (one-shot uniquement)
+const DIFFUSER_PRODUCT_ID_SET = new Set([
+  "10340876583253",
+]);
+
+// 👇 Mapping saveur abonnement -> POD 1 mois à seed en récurrence
+const POD_VARIANT_BY_FLAVOR = {
+  BN: "52030628725077",
+  ZERO: "52166742147413",
+  BE: "52166741197141",
+};
+
+
 // ---- Mapping "en dur" variant_id -> infos nécessaires pour Seal add_items ----
 // IMPORTANT : Seal exige product_id pour add_items
 const GIFT_VARIANTS_BY_ID = {
@@ -139,6 +153,14 @@ async function addRecurringGiftFromProperty(subscription) {
     return { skipped: true, reason: 'no_property_yet' };
   }
 
+    const flavorCode =
+    items?.[0]?.properties?.find((p) => p?.key === 'subscription_flavor_code')?.value ||
+    items
+      .find((it) => Array.isArray(it.properties) && it.properties.length)
+      ?.properties?.find((p) => p?.key === 'subscription_flavor_code')?.value ||
+    null;
+
+  
   // 4) Si déjà présent, on seed quand même
   const alreadyInItems = items.some((it) => String(it.variant_id) === String(giftVariantId));
   if (alreadyInItems) {
@@ -156,44 +178,95 @@ async function addRecurringGiftFromProperty(subscription) {
 
   // 5) Ajouter cadeau récurrent
 
-const giftVariantIdStr = String(giftVariantId);
-const cfg = GIFT_VARIANTS_BY_ID[giftVariantIdStr];
+  const giftVariantIdStr = String(giftVariantId);
 
-if (!cfg) {
-  console.error("[sealWebhook] giftVariantId not in mapping -> cannot add", {
-    subId,
-    giftVariantId: giftVariantIdStr,
-  });
+  // 🔍 On retrouve l’item cadeau original pour lire son product_id
+  const giftItemSource = items.find(
+    (it) => String(it.variant_id) === giftVariantIdStr
+  );
 
-  // On marque initialisé pour éviter spam webhook, MAIS tu peux décider de ne pas le faire
-  const newAttrs = setNoteAttr(subscription, "mymoodz_gift_seeded", "1");
+  const giftProductId = giftItemSource
+    ? String(giftItemSource.product_id)
+    : null;
 
-  await callSeal("/subscription", {
-    method: "PUT",
-    body: JSON.stringify({
-      id: Number(subId),
-      action: "edit",
-      edit: { note_attributes: newAttrs },
-    }),
-  });
+  // 🎯 Si le cadeau est un DIFFUSEUR → on seed un POD selon la saveur
+  let effectiveVariantId = giftVariantIdStr;
 
-  return { skipped: true, reason: "gift_variant_not_mapped", giftVariantId: giftVariantIdStr };
-}
+  if (giftProductId && DIFFUSER_PRODUCT_ID_SET.has(giftProductId)) {
+    const fallbackPodVariant =
+      POD_VARIANT_BY_FLAVOR[String(flavorCode || "").toUpperCase()];
 
-const giftItem = {
-  product_id: String(cfg.product_id),
-  variant_id: String(cfg.variant_id),
-  quantity: "1",
-  title: cfg.title,
-  sku: cfg.sku,
-  price: "0.00",
-  taxable: 0,
-  requires_shipping: 1,
-  one_time: 0, // ✅ récurrent
-  total_discount: 0,
-  subsc_discount_percent: 0,
-  properties: [],
-};
+    if (!fallbackPodVariant) {
+      return {
+        skipped: true,
+        reason: "diffuser_but_no_flavor_mapping",
+        giftVariantId: giftVariantIdStr,
+        flavorCode,
+      };
+    }
+
+    effectiveVariantId = String(fallbackPodVariant);
+  }
+
+  // ✅ Sécurité anti-doublon sur le POD effectif
+  const alreadyInItems = items.some(
+    (it) => String(it.variant_id) === effectiveVariantId
+  );
+
+  if (alreadyInItems) {
+    const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_seeded', '1');
+    await callSeal('/subscription', {
+      method: 'PUT',
+      body: JSON.stringify({
+        id: Number(subId),
+        action: 'edit',
+        edit: { note_attributes: newAttrs },
+      }),
+    });
+
+    return {
+      skipped: true,
+      reason: 'already_present_seeded',
+      effectiveVariantId,
+    };
+  }
+
+  const cfg = GIFT_VARIANTS_BY_ID[effectiveVariantId];
+
+  if (!cfg) {
+    const newAttrs = setNoteAttr(subscription, "mymoodz_gift_seeded", "1");
+
+    await callSeal("/subscription", {
+      method: "PUT",
+      body: JSON.stringify({
+        id: Number(subId),
+        action: "edit",
+        edit: { note_attributes: newAttrs },
+      }),
+    });
+
+    return {
+      skipped: true,
+      reason: "gift_variant_not_mapped",
+      giftVariantId: giftVariantIdStr,
+      effectiveVariantId,
+    };
+  }
+
+  const giftItem = {
+    product_id: String(cfg.product_id),
+    variant_id: String(cfg.variant_id),
+    quantity: "1",
+    title: cfg.title,
+    sku: cfg.sku,
+    price: "0.00",
+    taxable: 0,
+    requires_shipping: 1,
+    one_time: 0, // ✅ toujours récurrent ici
+    total_discount: 0,
+    subsc_discount_percent: 0,
+    properties: [],
+  };
 
 
 
