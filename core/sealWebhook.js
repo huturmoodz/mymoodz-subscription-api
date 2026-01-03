@@ -11,7 +11,7 @@ const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
 
 // 👇 Product ID du diffuseur essentiel (one-shot uniquement)
 const DIFFUSER_PRODUCT_ID_SET = new Set([
-  "10340876583253",
+  "10299097940309",
 ]);
 
 // 👇 Mapping saveur abonnement -> POD 1 mois à seed en récurrence
