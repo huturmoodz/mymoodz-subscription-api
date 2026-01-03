@@ -161,20 +161,6 @@ async function addRecurringGiftFromProperty(subscription) {
     null;
 
   
-  // 4) Si déjà présent, on seed quand même
-  const alreadyInItems = items.some((it) => String(it.variant_id) === String(giftVariantId));
-  if (alreadyInItems) {
-    const newAttrs = setNoteAttr(subscription, 'mymoodz_gift_seeded', '1');
-    await callSeal('/subscription', {
-      method: 'PUT',
-      body: JSON.stringify({
-        id: Number(subId),
-        action: 'edit',
-        edit: { note_attributes: newAttrs },
-      }),
-    });
-    return { skipped: true, reason: 'already_present_seeded', giftVariantId: String(giftVariantId) };
-  }
 
   // 5) Ajouter cadeau récurrent
 
@@ -210,7 +196,7 @@ async function addRecurringGiftFromProperty(subscription) {
 
   // ✅ Sécurité anti-doublon sur le POD effectif
   const alreadyInItems = items.some(
-    (it) => String(it.variant_id) === effectiveVariantId
+    (it) => String(it.variant_id) === String(effectiveVariantId)
   );
 
   if (alreadyInItems) {
