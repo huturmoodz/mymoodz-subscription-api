@@ -263,4 +263,8 @@ app.listen(PORT, () => {
   ensureOrderWebhook(base + '/webhooks/shopify/orders')
     .then((r) => console.log('[kits] webhook commandes', JSON.stringify(r)))
     .catch((e) => console.error('[kits] webhook commandes non créé :', e.message));
+  require('./core/kits/seal')
+    .ensureSealWebhook('subscription/updated', base + '/webhooks/seal/subscription-updated')
+    .then((r) => console.log('[kits] webhook Seal abonnement modifié', JSON.stringify(r)))
+    .catch((e) => console.error('[kits] webhook Seal non créé :', e.message, JSON.stringify(e.seal || '')));
 });
