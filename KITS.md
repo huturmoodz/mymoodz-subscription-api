@@ -4,10 +4,12 @@ Deux briques indépendantes :
 
 ## Brique A — Commandes (`core/kits/orderFlow.js`)
 Webhook Shopify `orders/create` et `orders/updated` → `POST /webhooks/shopify/orders`.
-1. Met la commande en attente d'expédition (hold `mmz-kit`) → MyLink ne la prend pas.
+1. La commande est mise en attente d'expédition dès sa création par une règle **Shopify Flow** (note `MMZ-KIT`),
+   puis par le serveur s'il ne l'est pas encore (hold `mmz-kit`) → MyLink ne la prend pas, même si le serveur dort.
 2. Vérifie la composition `_moodz_compose` (total = 4 boîtes × mois × quantité, saveurs connues).
 3. Ajoute les boîtes saveur à 0 € à la commande (édition de commande, client non notifié).
-4. Lève l'attente, tag `mmz-kit-ok`. En cas de problème : reste en attente + tag `mmz-kit-erreur`.
+4. Lève l'attente (uniquement les attentes `mmz-kit` / `MMZ-KIT`, jamais celles posées par d'autres), tag `mmz-kit-ok`.
+5. Clôt la demande d'expédition qui ne contient que la ligne Recharge (rattachée à un emplacement hors MyLink). En cas de problème : reste en attente + tag `mmz-kit-erreur`.
 Idempotent (rejouable). Rejouer à la main : `POST /admin/kits/orders/:id/reprocess` avec l'en-tête `x-admin-key`.
 
 ## Brique B — « Mes saveurs » (`core/kits/flavorsApi.js`)
