@@ -36,7 +36,8 @@ const qtyOf = (line) => Number(line.currentQuantity ?? line.quantity ?? 0);
  *  - une ligne Recharge composée (propriété _moodz_compose posée par le composeur), ou
  *  - une ligne Recharge ET des boîtes (renouvellement Seal : les boîtes viennent du contrat), ou
  *  - des boîtes SANS ligne Recharge (anomalie : boîtes gratuites seules → bloquée).
- * Une commande de l'ancienne gamme (Recharge sans composition ni boîtes) n'est jamais touchée.
+ * Une Recharge ZÉRO Saveurs sans composition ni boîtes (achat hors composeur) est bloquée : elle ne
+ * dirait pas quelles saveurs envoyer. L'ancien ZÉRO (pods-zero) n'est pas une « Recharge » ici : jamais touché.
  * @returns {{relevant:boolean, expected?:Map, target?:number, composed?:boolean, problems:string[]}}
  */
 function computeExpected(order) {
@@ -49,7 +50,9 @@ function computeExpected(order) {
     if (boxLines.length) return { relevant: true, expected: new Map(), target: 0, composed: false, problems: ['boites_sans_recharge'] };
     return { relevant: false, problems: [] };
   }
-  if (!composed.length && !boxLines.length) return { relevant: false, problems: [] };
+  if (!composed.length && !boxLines.length) {
+    return { relevant: true, expected: new Map(), target: 0, composed: false, problems: ['recharge_sans_saveurs'] };
+  }
 
   const problems = [];
   const expected = new Map();
