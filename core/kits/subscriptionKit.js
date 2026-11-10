@@ -111,6 +111,29 @@ async function applyToSubscription(sub, perUnit) {
   if (edits.length) await seal.editItems(sub.id, edits);
   if (adds.length) await seal.addItems(sub.id, adds);
 
+  // La ligne Recharge affiche « Saveurs : … » sur les commandes et e-mails de renouvellement :
+  // on la met à jour pour qu'elle corresponde aux boîtes réellement envoyées.
+  const compoStr = stringifyComposition(perUnit);
+  if (parent && seal.getItemProp(parent, config.props.compose) !== compoStr) {
+    try {
+      const raw = parent.properties;
+      const list = Array.isArray(raw)
+        ? raw.map((p) => ({ key: p.key ?? p.name, value: String(p.value ?? '') }))
+        : Object.entries(raw || {}).map(([key, value]) => ({ key, value: String(value ?? '') }));
+      const set = (key, value) => {
+        const f = list.find((p) => p.key === key);
+        if (f) f.value = value; else list.push({ key, value });
+      };
+      set(config.props.compose, compoStr);
+      set(config.props.flavorsLabel || 'Saveurs', describe(perUnit));
+      const edit = { id: Number(parent.id), quantity: String(parent.quantity), properties: list };
+      if (parent.price != null) edit.price = String(parent.price);
+      await seal.editItems(sub.id, [edit]);
+    } catch (e) {
+      console.error('[kits/seal] libellé Saveurs non mis à jour', sub.id, e.message);
+    }
+  }
+
   // On n'écrit la note que si elle change : chaque écriture redéclenche le webhook « abonnement modifié »,
   // et une écriture systématique créerait une boucle sans fin.
   const noteValue = `${parent.variant_id}|${stringifyComposition(perUnit)}`;
