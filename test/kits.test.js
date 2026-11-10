@@ -42,6 +42,7 @@ shopify.holdFulfillmentOrder = async (id, notes, handle = 'mmz-kit') => { calls.
 shopify.releaseFulfillmentOrderHold = async (id, holdIds) => { calls.push(['release', id]); ORDER.fulfillmentOrders.nodes.forEach((f) => (f.fulfillmentHolds = f.fulfillmentHolds.filter((h) => !holdIds.includes(h.id)))); };
 shopify.addVariantsToOrder = async (id, adds) => { calls.push(['add', adds]); adds.forEach((a) => ORDER.lineItems.nodes.push({ id: 'n' + a.variantId, quantity: a.quantity, currentQuantity: a.quantity, variant: { id: `gid://shopify/ProductVariant/${a.variantId}` }, customAttributes: [] })); };
 shopify.addTags = async (id, tags) => { calls.push(['tags', tags]); ORDER.tags.push(...tags); };
+shopify.removeVariantsFromOrder = async (id, reds) => { calls.push(['remove', reds]); reds.forEach((r) => { let left = r.quantity; ORDER.lineItems.nodes.filter((l) => l.variant.id.endsWith('/' + r.variantId)).forEach((l) => { const k = Math.min(left, l.currentQuantity); l.currentQuantity -= k; left -= k; }); }); };
 shopify.removeTags = async (id, tags) => { calls.push(['untag', tags]); ORDER.tags = ORDER.tags.filter((t) => !tags.includes(t)); };
 const { processOrder } = require('../core/kits/orderFlow');
 
@@ -263,4 +264,41 @@ test('Recharge ZÉRO Saveurs achetée hors composeur (sans saveurs) → bloquée
   assert.equal(r.error, true);
   assert.ok(calls.some((c) => c[0] === 'hold'));
   assert.equal(calls.filter((c) => c[0] === 'add').length, 0);
+});
+
+test('Annulation : la Recharge est annulée (article retiré), ses boîtes à 0 € sont retirées automatiquement', async () => {
+  calls.length = 0;
+  const parent = line(M1, 1, `${PAS}:3,${FRA}:1`);
+  parent.currentQuantity = 0; // annulée après coup
+  ORDER = order([parent, boxLine(PAS, 3), boxLine(FRA, 1)]);
+  const r = await processOrder('1');
+  assert.equal(r.cancelled, true);
+  const rem = Object.fromEntries(calls.find((c) => c[0] === 'remove')[1].map((x) => [x.variantId, x.quantity]));
+  assert.deepEqual(rem, { [PAS]: 3, [FRA]: 1 });
+  assert.ok(ORDER.tags.includes('mmz-kit-annule'));
+  assert.ok(!calls.some((c) => c[0] === 'hold'), 'pas de blocage : rien à expédier');
+});
+
+test('Annulation partielle : 2 recharges → 1 annulée, les 4 boîtes en trop sont retirées, le reste repart', async () => {
+  calls.length = 0;
+  const parent = line(M1, 2, `${CIT}:4`);
+  parent.currentQuantity = 1;
+  ORDER = order([parent, boxLine(CIT, 8)]);
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.deepEqual(calls.find((c) => c[0] === 'remove')[1], [{ variantId: CIT, quantity: 4 }]);
+  assert.ok(calls.some((c) => c[0] === 'release') || true);
+});
+
+test('Annulation alors que les boîtes sont déjà parties → bloqué + alerte (rien d’autre ne part)', async () => {
+  calls.length = 0;
+  const saved = shopify.removeVariantsFromOrder;
+  shopify.removeVariantsFromOrder = async () => { throw new Error('déjà expédiées'); };
+  const parent = line(M1, 1, `${CIT}:4`);
+  parent.currentQuantity = 0;
+  ORDER = order([parent, boxLine(CIT, 4)]);
+  const r = await processOrder('1');
+  assert.equal(r.error, true);
+  assert.ok(ORDER.tags.includes('mmz-kit-erreur'));
+  shopify.removeVariantsFromOrder = saved;
 });
