@@ -4,7 +4,8 @@ process.env.KITS_LIVE = 'true';
 process.env.KITS_CUSTOMER_SECRET = 'test-secret';
 process.env.SEAL_API_TOKEN = 'x';
 process.env.SHOPIFY_STORE_DOMAIN = 'test.myshopify.com';
-process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = 'x';
+process.env.SHOPIFY_KITS_ACCESS_TOKEN = 'x';
+process.env.SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || 'whsec';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
