@@ -45,8 +45,12 @@ function computeExpected(order) {
   const parents = lines.filter((l) => isParentVariant(variantOf(l)) && qtyOf(l) > 0);
   const composed = parents.filter((l) => attr(l, config.props.compose));
   const boxLines = lines.filter((l) => isBoxVariant(variantOf(l)) && qtyOf(l) > 0);
+  // Ligne Recharge retirée après coup (annulation d'article acceptée, édition) : quantité d'origine > quantité actuelle
+  const reduced = lines.some((l) => isParentVariant(variantOf(l)) && Number(l.quantity || 0) > qtyOf(l));
 
   if (!parents.length) {
+    // La Recharge a été annulée/retirée : ses boîtes doivent partir avec elle
+    if (boxLines.length && reduced) return { relevant: true, expected: new Map(), target: 0, composed: true, reduced, problems: [] };
     if (boxLines.length) return { relevant: true, expected: new Map(), target: 0, composed: false, problems: ['boites_sans_recharge'] };
     return { relevant: false, problems: [] };
   }
@@ -78,7 +82,7 @@ function computeExpected(order) {
     for (const [id, q] of perUnit) expected.set(id, (expected.get(id) || 0) + q * qtyOf(line));
   }
 
-  return { relevant: true, expected, target, composed: composed.length > 0, problems };
+  return { relevant: true, expected, target, composed: composed.length > 0, reduced, problems };
 }
 
 function currentBoxes(order) {
@@ -132,7 +136,14 @@ function plan(order, ctx) {
   const current = currentBoxes(order);
   const have = totalOf(current);
   if (have === ctx.target) return { add: new Map() };
-  if (have > ctx.target) return { problem: `surplus_de_boites (${have} pour ${ctx.target})` };
+  if (have > ctx.target) {
+    // Recharge réduite ou annulée après coup : on retire les boîtes en trop (celles de la recharge retirée)
+    if (ctx.reduced && ctx.composed) {
+      const { add, remove } = diff(ctx.expected, current);
+      if (!add.size && have - totalOf(remove) === ctx.target) return { add: new Map(), remove };
+    }
+    return { problem: `surplus_de_boites (${have} pour ${ctx.target})` };
+  }
   if (!ctx.composed) return { problem: `renouvellement_incomplet (${have} pour ${ctx.target})` };
   const { add, remove } = diff(ctx.expected, current);
   if (remove.size || have + totalOf(add) !== ctx.target) {
@@ -173,6 +184,21 @@ async function processOrder(orderId, source = 'webhook') {
 
     const decision = plan(order, ctx);
     if (decision.problem) return block(order, orderId, decision.problem);
+
+    if (decision.remove && decision.remove.size) {
+      const reductions = [...decision.remove.entries()].map(([variantId, quantity]) => ({ variantId, quantity }));
+      try {
+        await shopify.removeVariantsFromOrder(orderId, reductions, `Recharge annulée : boîtes retirées automatiquement (${describe(decision.remove)})`);
+      } catch (e) {
+        // Déjà expédiées ? On bloque ce qui reste et on alerte.
+        return block(order, orderId, `retrait_des_boites_impossible : ${e.message}`);
+      }
+      if (!(order.tags || []).includes('mmz-kit-annule')) await shopify.addTags(orderId, ['mmz-kit-annule']);
+      if (ctx.target === 0) {
+        console.log('[kits/order] recharge annulée, boîtes retirées', order.name, describe(decision.remove));
+        return { done: true, cancelled: true, order: order.name, removed: describe(decision.remove) };
+      }
+    }
 
     if (decision.add.size) {
       // Verrou MyLink avant de modifier la commande (Flow l'a normalement déjà posé)
