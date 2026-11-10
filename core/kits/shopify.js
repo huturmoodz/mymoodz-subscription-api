@@ -222,6 +222,57 @@ async function addVariantsToOrder(orderId, additions, staffNote) {
   return assertNoUserErrors(commit.orderEditCommit, 'orderEditCommit');
 }
 
+/**
+ * Retire des boîtes d'une commande (édition de commande, remise en stock, sans prévenir le client).
+ * @param reductions [{ variantId, quantity }] : nombre de boîtes à retirer par saveur
+ */
+async function removeVariantsFromOrder(orderId, reductions, staffNote) {
+  const begin = await graphql(
+    `mutation Begin($id: ID!) {
+      orderEditBegin(id: $id) {
+        calculatedOrder { id lineItems(first: 100) { nodes { id quantity editableQuantity variant { id } } } }
+        userErrors { field message }
+      }
+    }`,
+    { id: gid('Order', orderId) }
+  );
+  assertNoUserErrors(begin.orderEditBegin, 'orderEditBegin');
+  const calc = begin.orderEditBegin.calculatedOrder;
+  const lines = calc.lineItems?.nodes || [];
+
+  for (const { variantId, quantity } of reductions) {
+    let left = Number(quantity);
+    for (const l of lines.filter((x) => legacyId(x.variant?.id) === String(variantId))) {
+      if (left <= 0) break;
+      const can = Math.min(left, Number(l.editableQuantity ?? l.quantity));
+      if (can <= 0) continue;
+      const set = await graphql(
+        `mutation SetQty($id: ID!, $lineItemId: ID!, $quantity: Int!) {
+          orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity, restock: true) {
+            calculatedLineItem { id }
+            userErrors { field message }
+          }
+        }`,
+        { id: calc.id, lineItemId: l.id, quantity: Number(l.quantity) - can }
+      );
+      assertNoUserErrors(set.orderEditSetQuantity, 'orderEditSetQuantity');
+      left -= can;
+    }
+    if (left > 0) throw new Error(`Impossible de retirer ${left} boîte(s) ${variantId} : déjà expédiées ?`);
+  }
+
+  const commit = await graphql(
+    `mutation Commit($id: ID!, $note: String) {
+      orderEditCommit(id: $id, notifyCustomer: false, staffNote: $note) {
+        order { id }
+        userErrors { field message }
+      }
+    }`,
+    { id: calc.id, note: staffNote }
+  );
+  return assertNoUserErrors(commit.orderEditCommit, 'orderEditCommit');
+}
+
 /** Marque une demande d'expédition comme traitée (sans suivi, sans e-mail au client). */
 async function fulfillWithoutShipping(foId, message) {
   const data = await graphql(
@@ -258,5 +309,5 @@ async function removeTags(orderId, tags) {
 
 module.exports = {
   graphql, getToken, gid, legacyId, verifyShopifyWebhook, ensureOrderWebhook,
-  getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, addTags, removeTags, fulfillWithoutShipping,
+  getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, removeVariantsFromOrder, addTags, removeTags, fulfillWithoutShipping,
 };
