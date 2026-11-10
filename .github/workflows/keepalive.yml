@@ -1,0 +1,11 @@
+name: Réveil serveur Render
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: curl -fsS --max-time 90 https://mymoodz-subscription-api.onrender.com/health || true
