@@ -134,3 +134,38 @@ test('B : jeton valide accepté, falsifié ou périmé refusé', () => {
   assert.equal(verifyCustomerToken(mk({ c: 42, e: 'hugo@x.fr', t: now - 7 * 3600 })), null);
   assert.equal(verifyCustomerToken('n.importe.quoi'), null);
 });
+
+// ---------- Attente posée par Flow + clôture de la ligne Recharge ----------
+test('A : attente posée par Flow (note MMZ-KIT) reconnue et levée, ligne Recharge clôturée', async () => {
+  calls.length = 0;
+  shopify.fulfillWithoutShipping = async (id) => calls.push(['close', id]);
+  ORDER = order([line(M1, 1, `${CIT}:4`)]);
+  ORDER.fulfillmentOrders.nodes = [
+    { id: 'foParent', status: 'OPEN', fulfillmentHolds: [{ id: 'hf', handle: null, reasonNotes: 'MMZ-KIT attente boîtes' }],
+      lineItems: { nodes: [{ id: 'x', remainingQuantity: 1, lineItem: { variant: { id: `gid://shopify/ProductVariant/${M1}` } } }] } },
+  ];
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  const kinds = calls.map((c) => c[0]);
+  assert.ok(!kinds.includes('hold'), 'pas de seconde attente si Flow en a déjà posé une');
+  assert.ok(kinds.includes('release'));
+  assert.ok(kinds.includes('close'));
+});
+
+test('A : commande sans kit mais attente Flow → attente levée (aucune commande bloquée par erreur)', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, null)]);
+  ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds = [{ id: 'hf', handle: null, reasonNotes: 'MMZ-KIT' }];
+  const r = await processOrder('1');
+  assert.equal(r.released, true);
+  assert.deepEqual(calls.map((c) => c[0]), ['release']);
+});
+
+test('A : une attente posée par quelqu’un d’autre n’est jamais levée', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, null)]);
+  ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds = [{ id: 'hx', handle: 'fraude', reasonNotes: 'Vérification' }];
+  const r = await processOrder('1');
+  assert.equal(r.released, false);
+  assert.equal(calls.length, 0);
+});
