@@ -4,12 +4,13 @@
 // pour ajouter une saveur ou une gamme sans redéployer de code.
 
 const DEFAULT_CONFIG = {
-  // Une ligne « parent » = une variante de durée du produit recharge (pods-zero).
+  // Une ligne « parent » = une variante de durée du produit « Recharge ZÉRO Saveurs » (nouvelle gamme).
+  // L'ancien ZÉRO (pods-zero) n'en fait PAS partie : ses commandes et abonnements ne sont jamais touchés.
   // months = nombre de mois couverts par UNE unité de cette variante.
   parents: {
-    '52143295037781': { months: 1, label: 'Recharge ZÉRO 1 mois' },
-    '52143295070549': { months: 2, label: 'Recharge ZÉRO 2 mois' },
-    '52143295103317': { months: 3, label: 'Recharge ZÉRO 3 mois' },
+    '55725002883413': { months: 1, label: 'Recharge ZÉRO Saveurs 1 mois', sku: 'REC-ZERO-1M' },
+    '55725002916181': { months: 2, label: 'Recharge ZÉRO Saveurs 2 mois', sku: 'REC-ZERO-2M' },
+    '55725002948949': { months: 3, label: 'Recharge ZÉRO Saveurs 3 mois', sku: 'REC-ZERO-3M' },
   },
   boxesPerMonth: 4,
   // Produit « boîte » : une variante par saveur. Ce sont les vrais articles physiques (SKU MyLink).
@@ -51,8 +52,7 @@ const isBoxVariant = (id) => Object.prototype.hasOwnProperty.call(config.boxes, 
 const monthsOf = (variantId) => (config.parents[String(variantId)] || {}).months || 0;
 const boxesTargetFor = (variantId, qty = 1) => monthsOf(variantId) * config.boxesPerMonth * Number(qty || 0);
 
-// Le serveur ne traite les commandes « kits » que si KITS_LIVE=true :
-// tant que pods-zero vend l'ancien ZÉRO, rien ne doit être touché.
+// Interrupteur général : le serveur ne traite les commandes « kits » que si KITS_LIVE=true.
 const kitsLive = () => String(process.env.KITS_LIVE || '').toLowerCase() === 'true';
 
 module.exports = { config, isParentVariant, isBoxVariant, monthsOf, boxesTargetFor, kitsLive };

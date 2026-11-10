@@ -13,7 +13,8 @@ const crypto = require('crypto');
 
 const C = require('../core/kits/composition');
 const MEN = '55665971560789', CIT = '55665971593557', PAS = '55665971626325', FRA = '55665971659093';
-const M1 = '52143295037781', M2 = '52143295070549', M3 = '52143295103317';
+const M1 = '55725002883413', M2 = '55725002916181', M3 = '55725002948949';
+const OLD1 = '52143295037781', OLD3 = '52143295103317'; // ancien ZÉRO (pods-zero)
 
 test('composition : lecture, total, refus des saveurs inconnues', () => {
   const m = C.parseComposition(`${MEN}:2,${CIT}:1,${PAS}:1, bad , ${CIT}:x`);
@@ -87,9 +88,9 @@ test('A : upsell post-achat sans composition → reprend les proportions de la r
   assert.deepEqual(added, { [MEN]: 4, [CIT]: 4 });
 });
 
-test('A : ancienne gamme (pas de composition) → aucune action', async () => {
+test('A : ancien ZÉRO (pods-zero) → aucune action', async () => {
   calls.length = 0;
-  ORDER = order([line(M1, 1, null)]);
+  ORDER = order([line(OLD1, 1, null)]);
   const r = await processOrder('1');
   assert.equal(r.skipped, true);
   assert.equal(calls.length, 0);
@@ -156,7 +157,7 @@ test('A : attente posée par Flow (note MMZ-KIT) reconnue et levée, ligne Recha
 
 test('A : commande sans kit mais attente Flow → attente levée (aucune commande bloquée par erreur)', async () => {
   calls.length = 0;
-  ORDER = order([line(M1, 1, null)]);
+  ORDER = order([line(OLD1, 1, null)]);
   ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds = [{ id: 'hf', handle: null, reasonNotes: 'MMZ-KIT' }];
   const r = await processOrder('1');
   assert.equal(r.released, true);
@@ -165,7 +166,7 @@ test('A : commande sans kit mais attente Flow → attente levée (aucune command
 
 test('A : une attente posée par quelqu’un d’autre n’est jamais levée', async () => {
   calls.length = 0;
-  ORDER = order([line(M1, 1, null)]);
+  ORDER = order([line(OLD1, 1, null)]);
   ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds = [{ id: 'hx', handle: 'fraude', reasonNotes: 'Vérification' }];
   const r = await processOrder('1');
   assert.equal(r.released, false);
@@ -221,9 +222,9 @@ test('Abus : boîtes gratuites ajoutées en plus d’une recharge composée → 
   assert.equal(calls.filter((c) => c[0] === 'add').length, 0);
 });
 
-test('Ancienne gamme ZÉRO : recharge sans composition ni boîtes → jamais touchée, même en abonnement', async () => {
+test('Ancien ZÉRO : commandes pods-zero (1 et 3 mois) → jamais touchées, même en abonnement', async () => {
   calls.length = 0;
-  ORDER = order([line(M1, 1, null), line(M3, 2, null)]);
+  ORDER = order([line(OLD1, 1, null), line(OLD3, 2, null)]);
   const r = await processOrder('1');
   assert.equal(r.skipped, true);
   assert.equal(calls.length, 0);
@@ -253,4 +254,13 @@ test('Commande de test (_mmz_test=1) : boîtes ajoutées, mais une attente « mm
   const kinds = calls.map((c) => c[0]);
   assert.ok(kinds.indexOf('hold') < kinds.indexOf('release'), 'attente de test posée avant de lever les nôtres');
   assert.ok(ORDER.tags.includes('mmz-test'));
+});
+
+test('Recharge ZÉRO Saveurs achetée hors composeur (sans saveurs) → bloquée + alerte, rien n’est deviné', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, null)]);
+  const r = await processOrder('1');
+  assert.equal(r.error, true);
+  assert.ok(calls.some((c) => c[0] === 'hold'));
+  assert.equal(calls.filter((c) => c[0] === 'add').length, 0);
 });
