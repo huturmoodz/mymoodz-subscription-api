@@ -55,6 +55,29 @@ async function upsertNotes(id, upserts) {
   return put({ id: Number(id), action: 'edit', edit: { note_attributes } });
 }
 
+/**
+ * Abonne le serveur au webhook Seal « abonnement modifié » (changement de durée dans l'espace client…).
+ * Idempotent. Seal ne permet de gérer ses webhooks que par l'API, pas dans son interface.
+ */
+async function ensureSealWebhook(topic, address) {
+  let list = null;
+  for (const path of ['/webhooks', '/webhook']) {
+    try {
+      list = await callSeal(path, { method: 'GET' });
+      if (JSON.stringify(list).includes(address)) return { exists: true };
+      try {
+        await callSeal(path, { method: 'POST', body: JSON.stringify({ topic, address }) });
+        return { created: true };
+      } catch (e) {
+        if (e.seal?.status !== 404) throw e;
+      }
+    } catch (e) {
+      if (e.seal?.status !== 404) throw e;
+    }
+  }
+  throw new Error('API webhooks Seal introuvable');
+}
+
 const getNote = (sub, name) => {
   const f = (sub?.note_attributes || []).find((a) => a?.name === name);
   return f ? String(f.value ?? '') : '';
@@ -70,4 +93,5 @@ const getItemProp = (item, key) => {
   return '';
 };
 
-module.exports = { callSeal, getSubscription, findSubscriptionsByEmail, addItems, removeItems, editItems, upsertNotes, getNote, getItemProp };
+module.exports = {
+  ensureSealWebhook, callSeal, getSubscription, findSubscriptionsByEmail, addItems, removeItems, editItems, upsertNotes, getNote, getItemProp };

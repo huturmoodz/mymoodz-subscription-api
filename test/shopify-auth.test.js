@@ -47,18 +47,19 @@ test('webhook accepté avec le secret boutique ou le secret de l\'app, refusé s
 
 test('abonnement webhook créé seulement s\'il manque', async () => {
   let created = 0;
-  let existing = [];
+  let existing = {};
   global.fetch = async (url, opts) => {
     if (url.endsWith('access_token')) return { ok: true, status: 200, json: async () => ({ access_token: 't', expires_in: 86399 }) };
     const q = JSON.parse(opts.body).query;
     if (q.includes('webhookSubscriptionCreate')) {
       created++;
-      existing = [{ id: 'w', endpoint: { callbackUrl: 'https://x/webhooks/shopify/orders' } }];
+      const t = JSON.parse(opts.body).variables.topic;
+      existing[t] = [{ id: 'w', endpoint: { callbackUrl: 'https://x/webhooks/shopify/orders' } }];
       return { ok: true, status: 200, json: async () => ({ data: { webhookSubscriptionCreate: { webhookSubscription: { id: 'w' }, userErrors: [] } } }) };
     }
-    return { ok: true, status: 200, json: async () => ({ data: { webhookSubscriptions: { nodes: existing } } }) };
+    return { ok: true, status: 200, json: async () => ({ data: { webhookSubscriptions: { nodes: existing[JSON.parse(opts.body).variables.topics[0]] || [] } } }) };
   };
-  assert.deepEqual(await shopify.ensureOrderWebhook('https://x/webhooks/shopify/orders'), { created: true });
-  assert.deepEqual(await shopify.ensureOrderWebhook('https://x/webhooks/shopify/orders'), { exists: true });
-  assert.equal(created, 1);
+  assert.deepEqual(await shopify.ensureOrderWebhook('https://x/webhooks/shopify/orders'), { ORDERS_CREATE: 'created', ORDERS_UPDATED: 'created' });
+  assert.deepEqual(await shopify.ensureOrderWebhook('https://x/webhooks/shopify/orders'), { ORDERS_CREATE: 'exists', ORDERS_UPDATED: 'exists' });
+  assert.equal(created, 2);
 });

@@ -37,10 +37,11 @@ const shopify = require('../core/kits/shopify');
 const calls = [];
 let ORDER;
 shopify.getOrder = async () => JSON.parse(JSON.stringify(ORDER));
-shopify.holdFulfillmentOrder = async (id) => { calls.push(['hold', id]); ORDER.fulfillmentOrders.nodes.forEach((f) => f.id === id && f.fulfillmentHolds.push({ id: 'h1', handle: 'mmz-kit' })); };
-shopify.releaseFulfillmentOrderHold = async (id) => { calls.push(['release', id]); ORDER.fulfillmentOrders.nodes.forEach((f) => (f.fulfillmentHolds = [])); };
+shopify.holdFulfillmentOrder = async (id, notes, handle = 'mmz-kit') => { calls.push(['hold', id, handle]); ORDER.fulfillmentOrders.nodes.forEach((f) => f.id === id && f.fulfillmentHolds.push({ id: 'h' + handle, handle, reasonNotes: notes })); };
+shopify.releaseFulfillmentOrderHold = async (id, holdIds) => { calls.push(['release', id]); ORDER.fulfillmentOrders.nodes.forEach((f) => (f.fulfillmentHolds = f.fulfillmentHolds.filter((h) => !holdIds.includes(h.id)))); };
 shopify.addVariantsToOrder = async (id, adds) => { calls.push(['add', adds]); adds.forEach((a) => ORDER.lineItems.nodes.push({ id: 'n' + a.variantId, quantity: a.quantity, currentQuantity: a.quantity, variant: { id: `gid://shopify/ProductVariant/${a.variantId}` }, customAttributes: [] })); };
 shopify.addTags = async (id, tags) => { calls.push(['tags', tags]); ORDER.tags.push(...tags); };
+shopify.removeTags = async (id, tags) => { calls.push(['untag', tags]); ORDER.tags = ORDER.tags.filter((t) => !tags.includes(t)); };
 const { processOrder } = require('../core/kits/orderFlow');
 
 const line = (variant, qty, compose) => ({
@@ -169,4 +170,87 @@ test('A : une attente posée par quelqu’un d’autre n’est jamais levée', a
   const r = await processOrder('1');
   assert.equal(r.released, false);
   assert.equal(calls.length, 0);
+});
+
+// ---------- Renouvellements, anomalies, commande de test ----------
+const boxLine = (variant, qty) => ({ id: 'b' + variant, quantity: qty, currentQuantity: qty,
+  variant: { id: `gid://shopify/ProductVariant/${variant}` }, customAttributes: [{ key: '_moodz_kit', value: '1' }] });
+
+test('Renouvellement : le client a changé ses saveurs (contrat ≠ propriété d’origine) → accepté tel quel, rien ajouté', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, `${MEN}:4`), boxLine(CIT, 2), boxLine(FRA, 2)]);
+  ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds = [{ id: 'hf', handle: null, reasonNotes: 'MMZ-KIT attente' }];
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.equal(calls.filter((c) => c[0] === 'add').length, 0);
+  assert.ok(calls.some((c) => c[0] === 'release'));
+});
+
+test('Renouvellement sans propriété sur la ligne Recharge, boîtes complètes → libéré, ligne Recharge clôturée', async () => {
+  calls.length = 0;
+  ORDER = order([line(M2, 1, null), boxLine(PAS, 8)]);
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.equal(calls.filter((c) => c[0] === 'add').length, 0);
+});
+
+test('Renouvellement incomplet (6 boîtes pour 2 mois, sans composition) → bloqué + erreur, on ne devine pas', async () => {
+  calls.length = 0;
+  ORDER = order([line(M2, 1, null), boxLine(PAS, 6)]);
+  const r = await processOrder('1');
+  assert.equal(r.error, true);
+  assert.ok(calls.some((c) => c[0] === 'hold'));
+  assert.ok(calls.some((c) => c[0] === 'tags' && c[1].includes('mmz-kit-erreur')));
+  assert.ok(!calls.some((c) => c[0] === 'release'));
+});
+
+test('Abus : boîtes à 0 € commandées seules, sans recharge → commande bloquée + erreur', async () => {
+  calls.length = 0;
+  ORDER = order([boxLine(MEN, 4)]);
+  const r = await processOrder('1');
+  assert.equal(r.error, true);
+  assert.ok(calls.some((c) => c[0] === 'hold'));
+  assert.ok(!calls.some((c) => c[0] === 'release'));
+});
+
+test('Abus : boîtes gratuites ajoutées en plus d’une recharge composée → bloquée, rien ajouté', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, `${MEN}:4`), boxLine(MEN, 6)]);
+  const r = await processOrder('1');
+  assert.equal(r.error, true);
+  assert.equal(calls.filter((c) => c[0] === 'add').length, 0);
+});
+
+test('Ancienne gamme ZÉRO : recharge sans composition ni boîtes → jamais touchée, même en abonnement', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, null), line(M3, 2, null)]);
+  const r = await processOrder('1');
+  assert.equal(r.skipped, true);
+  assert.equal(calls.length, 0);
+});
+
+test('Erreur corrigée ensuite (rejeu après correction manuelle) → tag erreur retiré, tag ok posé', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, `${CIT}:4`), boxLine(CIT, 4)]);
+  ORDER.tags = ['mmz-kit-erreur'];
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.ok(calls.some((c) => c[0] === 'untag'));
+  assert.ok(ORDER.tags.includes('mmz-kit-ok'));
+});
+
+test('Commande de test (_mmz_test=1) : boîtes ajoutées, mais une attente « mmz-test » reste → MyLink ne la voit jamais', async () => {
+  calls.length = 0;
+  ORDER = order([line(M1, 1, `${FRA}:4`)]);
+  ORDER.customAttributes = [{ key: '_mmz_test', value: '1' }];
+  ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds = [{ id: 'hf', handle: null, reasonNotes: 'MMZ-KIT attente' }];
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.equal(r.test, true);
+  const holds = ORDER.fulfillmentOrders.nodes[0].fulfillmentHolds;
+  assert.equal(holds.length, 1);
+  assert.equal(holds[0].handle, 'mmz-test');
+  const kinds = calls.map((c) => c[0]);
+  assert.ok(kinds.indexOf('hold') < kinds.indexOf('release'), 'attente de test posée avant de lever les nôtres');
+  assert.ok(ORDER.tags.includes('mmz-test'));
 });

@@ -23,22 +23,37 @@ const FLOW_MARK = 'MMZ-KIT';
 // Les attentes posées par d'autres (fraude, équipe…) ne sont jamais levées ici.
 const isOurHold = (h) => h.handle === HOLD_HANDLE || String(h.reasonNotes || '').includes(FLOW_MARK);
 const attr = (line, key) => (line.customAttributes || []).find((a) => a.key === key)?.value || '';
+// Commande de test (attribut de panier _mmz_test=1) : tout le circuit est exécuté, mais la commande
+// garde une attente « mmz-test » que le serveur ne lève jamais : MyLink ne la voit pas.
+const TEST_HANDLE = 'mmz-test';
+const isTestOrder = (order) => (order.customAttributes || []).some((a) => a.key === '_mmz_test' && String(a.value) === '1');
 const variantOf = (line) => shopify.legacyId(line.variant?.id);
 const qtyOf = (line) => Number(line.currentQuantity ?? line.quantity ?? 0);
 
 /**
  * Calcule les boîtes attendues pour la commande.
- * @returns {{relevant:boolean, expected?:Map, problems:string[]}}
+ * Une commande est « concernée » si elle contient :
+ *  - une ligne Recharge composée (propriété _moodz_compose posée par le composeur), ou
+ *  - une ligne Recharge ET des boîtes (renouvellement Seal : les boîtes viennent du contrat), ou
+ *  - des boîtes SANS ligne Recharge (anomalie : boîtes gratuites seules → bloquée).
+ * Une commande de l'ancienne gamme (Recharge sans composition ni boîtes) n'est jamais touchée.
+ * @returns {{relevant:boolean, expected?:Map, target?:number, composed?:boolean, problems:string[]}}
  */
 function computeExpected(order) {
   const lines = order.lineItems?.nodes || [];
   const parents = lines.filter((l) => isParentVariant(variantOf(l)) && qtyOf(l) > 0);
   const composed = parents.filter((l) => attr(l, config.props.compose));
-  // Pas de ligne composée = ancienne gamme ou commande sans kit : on ne touche à rien.
-  if (!composed.length) return { relevant: false, problems: [] };
+  const boxLines = lines.filter((l) => isBoxVariant(variantOf(l)) && qtyOf(l) > 0);
+
+  if (!parents.length) {
+    if (boxLines.length) return { relevant: true, expected: new Map(), target: 0, composed: false, problems: ['boites_sans_recharge'] };
+    return { relevant: false, problems: [] };
+  }
+  if (!composed.length && !boxLines.length) return { relevant: false, problems: [] };
 
   const problems = [];
   const expected = new Map();
+  const target = parents.reduce((s, l) => s + monthsOf(variantOf(l)) * config.boxesPerMonth * qtyOf(l), 0);
   // Composition de référence (par mois) pour les lignes parent arrivées sans composition (upsell post-achat).
   let reference = null;
 
@@ -55,12 +70,12 @@ function computeExpected(order) {
   }
 
   for (const line of parents.filter((l) => !attr(l, config.props.compose))) {
-    const target = monthsOf(variantOf(line)) * config.boxesPerMonth;
-    const perUnit = reference ? rescale(reference.map, target) : new Map([[config.defaultBoxVariantId, target]]);
+    const lineTarget = monthsOf(variantOf(line)) * config.boxesPerMonth;
+    const perUnit = reference ? rescale(reference.map, lineTarget) : new Map([[config.defaultBoxVariantId, lineTarget]]);
     for (const [id, q] of perUnit) expected.set(id, (expected.get(id) || 0) + q * qtyOf(line));
   }
 
-  return { relevant: true, expected, problems };
+  return { relevant: true, expected, target, composed: composed.length > 0, problems };
 }
 
 function currentBoxes(order) {
@@ -102,6 +117,34 @@ async function closeParentOnlyFOs(order) {
   }
 }
 
+/**
+ * Décide quoi faire des boîtes déjà présentes.
+ *  - total exact : la commande est complète. C'est le cas d'un renouvellement Seal (les boîtes viennent
+ *    du contrat, éventuellement modifiées par le client dans « Mes saveurs ») ou d'une commande déjà traitée.
+ *    On ne compare PAS la répartition à la propriété de la ligne Recharge, qui peut dater du premier achat.
+ *  - aucune boîte, ou seulement une partie de celles attendues : on ajoute ce qui manque.
+ *  - plus de boîtes que prévu, ou un mélange incohérent : on bloque et on signale.
+ */
+function plan(order, ctx) {
+  const current = currentBoxes(order);
+  const have = totalOf(current);
+  if (have === ctx.target) return { add: new Map() };
+  if (have > ctx.target) return { problem: `surplus_de_boites (${have} pour ${ctx.target})` };
+  if (!ctx.composed) return { problem: `renouvellement_incomplet (${have} pour ${ctx.target})` };
+  const { add, remove } = diff(ctx.expected, current);
+  if (remove.size || have + totalOf(add) !== ctx.target) {
+    return { problem: `boites_incoherentes (présentes : ${describe(current)})` };
+  }
+  return { add };
+}
+
+async function block(order, orderId, reason) {
+  await holdAll(order, `MMZ-KIT bloquée : ${reason}`);
+  if (!(order.tags || []).includes(config.tags.error)) await shopify.addTags(orderId, [config.tags.error]);
+  console.error('[kits/order] commande bloquée', order.name, reason);
+  return { error: true, order: order.name, reason };
+}
+
 async function processOrder(orderId, source = 'webhook') {
   if (!kitsLive()) return { skipped: true, reason: 'kits_desactives' };
 
@@ -113,49 +156,51 @@ async function processOrder(orderId, source = 'webhook') {
       return { skipped: true, reason: 'deja_expediee' };
     }
 
-    const { relevant, expected, problems } = computeExpected(order);
-    if (!relevant) {
+    const ctx = computeExpected(order);
+    if (!ctx.relevant) {
       // Filet : si la règle Flow a mis une attente sur une commande sans kit, on la lève.
       const flowHeld = (order.fulfillmentOrders?.nodes || []).some((fo) => (fo.fulfillmentHolds || []).some(isOurHold));
       if (flowHeld) await releaseAll(orderId);
       return { skipped: true, reason: 'pas_de_kit', released: flowHeld };
     }
 
-    // 1. Verrou MyLink d'abord, quoi qu'il arrive ensuite
-    await holdAll(order, 'MyMOODz : ajout des boîtes de saveur en cours');
+    // Composition invalide, trafiquée, ou boîtes sans recharge : la commande reste bloquée,
+    // le tag mmz-kit-erreur déclenche l'alerte e-mail de Flow.
+    if (ctx.problems.length) return block(order, orderId, ctx.problems.join(' ; '));
 
-    if (problems.length) {
-      // Composition invalide ou trafiquée : la commande reste bloquée, le tag alerte l'équipe (Flow / admin)
-      await shopify.addTags(orderId, [config.tags.error]);
-      console.error('[kits/order] composition refusée', order.name, problems);
-      return { error: true, order: order.name, problems };
-    }
+    const decision = plan(order, ctx);
+    if (decision.problem) return block(order, orderId, decision.problem);
 
-    const current = currentBoxes(order);
-    const { add, remove } = diff(expected, current);
-
-    if (remove.size) {
-      // Plus de boîtes que prévu (modification manuelle ?) : on ne retire rien soi-même, on signale.
-      await shopify.addTags(orderId, [config.tags.error]);
-      console.error('[kits/order] trop de boîtes, vérification manuelle', order.name, describe(remove));
-      return { error: true, order: order.name, reason: 'surplus_de_boites', surplus: describe(remove) };
-    }
-
-    if (add.size) {
-      const additions = [...add.entries()].map(([variantId, quantity]) => ({ variantId, quantity }));
+    if (decision.add.size) {
+      // Verrou MyLink avant de modifier la commande (Flow l'a normalement déjà posé)
+      await holdAll(order, 'MMZ-KIT ajout des boîtes de saveur en cours');
+      const additions = [...decision.add.entries()].map(([variantId, quantity]) => ({ variantId, quantity }));
       await shopify.addVariantsToOrder(
         orderId,
         additions,
-        `Boîtes ajoutées automatiquement (${source}) : ${describe(add)}`
+        `Boîtes ajoutées automatiquement (${source}) : ${describe(decision.add)}`
       );
     }
 
-    // 4. Commande complète : on libère MyLink, puis 5. on clôt la ligne Recharge
+    const test = isTestOrder(order);
+    if (test) {
+      // L'attente de test est posée AVANT de lever les nôtres : la commande n'est jamais libre.
+      for (const fo of openFOs(order)) {
+        if (!(fo.fulfillmentHolds || []).some((h) => h.handle === TEST_HANDLE)) {
+          await shopify.holdFulfillmentOrder(fo.id, 'MMZ-TEST commande de test : ne pas expédier', TEST_HANDLE);
+        }
+      }
+    }
+
+    // Commande complète : on libère MyLink, on clôt la ligne Recharge, on marque la commande
     const fresh = await releaseAll(orderId);
     await closeParentOnlyFOs(fresh);
-    if (!(order.tags || []).includes(config.tags.ok)) await shopify.addTags(orderId, [config.tags.ok]);
+    const tags = order.tags || [];
+    if (!tags.includes(config.tags.ok)) await shopify.addTags(orderId, [config.tags.ok]);
+    if (tags.includes(config.tags.error)) await shopify.removeTags(orderId, [config.tags.error]);
+    if (test && !tags.includes('mmz-test')) await shopify.addTags(orderId, ['mmz-test']);
 
-    const result = { done: true, order: order.name, added: describe(add) || 'rien (déjà complète)', total: totalOf(expected) };
+    const result = { done: true, test, order: order.name, added: describe(decision.add) || 'rien (déjà complète)', total: ctx.target };
     console.log('[kits/order]', result);
     return result;
   });

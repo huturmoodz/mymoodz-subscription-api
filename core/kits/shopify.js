@@ -103,21 +103,27 @@ function verifyShopifyWebhook(rawBody, hmacHeader) {
  */
 async function ensureOrderWebhook(callbackUrl) {
   if (!CLIENT_ID || !CLIENT_SECRET) return { skipped: 'pas d\'app Dev Dashboard configurée' };
-  const data = await graphql(`{ webhookSubscriptions(first: 50, topics: [ORDERS_CREATE]) {
-    nodes { id endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } } } }`);
-  const exists = (data.webhookSubscriptions?.nodes || []).some((n) => n.endpoint?.callbackUrl === callbackUrl);
-  if (exists) return { exists: true };
-  const created = await graphql(
-    `mutation Sub($url: URL!) {
-      webhookSubscriptionCreate(topic: ORDERS_CREATE, webhookSubscription: { callbackUrl: $url, format: JSON }) {
-        webhookSubscription { id }
-        userErrors { field message }
-      }
-    }`,
-    { url: callbackUrl }
-  );
-  assertNoUserErrors(created.webhookSubscriptionCreate, 'webhookSubscriptionCreate');
-  return { created: true };
+  const result = {};
+  // Création : traitement immédiat. Mise à jour : rattrape un upsell post-achat ou une édition manuelle.
+  for (const topic of ['ORDERS_CREATE', 'ORDERS_UPDATED']) {
+    const data = await graphql(`query Subs($topics: [WebhookSubscriptionTopic!]) {
+      webhookSubscriptions(first: 50, topics: $topics) {
+        nodes { id endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } } } }`, { topics: [topic] });
+    const exists = (data.webhookSubscriptions?.nodes || []).some((n) => n.endpoint?.callbackUrl === callbackUrl);
+    if (exists) { result[topic] = 'exists'; continue; }
+    const created = await graphql(
+      `mutation Sub($topic: WebhookSubscriptionTopic!, $url: URL!) {
+        webhookSubscriptionCreate(topic: $topic, webhookSubscription: { callbackUrl: $url, format: JSON }) {
+          webhookSubscription { id }
+          userErrors { field message }
+        }
+      }`,
+      { topic, url: callbackUrl }
+    );
+    assertNoUserErrors(created.webhookSubscriptionCreate, 'webhookSubscriptionCreate');
+    result[topic] = 'created';
+  }
+  return result;
 }
 
 const ORDER_QUERY = `
@@ -126,6 +132,7 @@ query KitOrder($id: ID!) {
     id
     name
     tags
+    customAttributes { key value }
     cancelledAt
     displayFulfillmentStatus
     lineItems(first: 100) {
@@ -153,7 +160,7 @@ async function getOrder(orderId) {
   return data.order;
 }
 
-async function holdFulfillmentOrder(foId, notes) {
+async function holdFulfillmentOrder(foId, notes, handle = 'mmz-kit') {
   const data = await graphql(
     `mutation Hold($id: ID!, $hold: FulfillmentOrderHoldInput!) {
       fulfillmentOrderHold(id: $id, fulfillmentHold: $hold) {
@@ -161,7 +168,7 @@ async function holdFulfillmentOrder(foId, notes) {
         userErrors { field message }
       }
     }`,
-    { id: foId, hold: { reason: 'OTHER', reasonNotes: notes, handle: 'mmz-kit', notifyMerchant: false } }
+    { id: foId, hold: { reason: 'OTHER', reasonNotes: notes, handle, notifyMerchant: false } }
   );
   return assertNoUserErrors(data.fulfillmentOrderHold, 'fulfillmentOrderHold');
 }
@@ -239,7 +246,17 @@ async function addTags(orderId, tags) {
   return assertNoUserErrors(data.tagsAdd, 'tagsAdd');
 }
 
+async function removeTags(orderId, tags) {
+  const data = await graphql(
+    `mutation Untag($id: ID!, $tags: [String!]!) {
+      tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
+    }`,
+    { id: gid('Order', orderId), tags }
+  );
+  return assertNoUserErrors(data.tagsRemove, 'tagsRemove');
+}
+
 module.exports = {
   graphql, getToken, gid, legacyId, verifyShopifyWebhook, ensureOrderWebhook,
-  getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, addTags, fulfillWithoutShipping,
+  getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, addTags, removeTags, fulfillWithoutShipping,
 };
