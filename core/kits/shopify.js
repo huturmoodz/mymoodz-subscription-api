@@ -4,20 +4,58 @@
 const crypto = require('crypto');
 
 const DOMAIN = process.env.SHOPIFY_STORE_DOMAIN; // ex. testshopilol.myshopify.com
-const TOKEN = process.env.SHOPIFY_KITS_ACCESS_TOKEN || process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+const STATIC_TOKEN = process.env.SHOPIFY_KITS_ACCESS_TOKEN || '';
+const CLIENT_ID = process.env.SHOPIFY_KITS_CLIENT_ID || '';
+const CLIENT_SECRET = process.env.SHOPIFY_KITS_CLIENT_SECRET || '';
 const VERSION = process.env.SHOPIFY_KITS_API_VERSION || '2025-10';
-const WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET;
+// Webhooks créés dans l'admin (Paramètres > Notifications) : signés avec le secret de la boutique.
+// Webhooks créés par l'app du Dev Dashboard : signés avec le secret client de l'app.
+const WEBHOOK_SECRETS = [process.env.SHOPIFY_WEBHOOK_SECRET, CLIENT_SECRET].filter(Boolean);
+
+// Jeton d'accès : app du Dev Dashboard (identifiants client, jeton renouvelé automatiquement)
+// ou, à défaut, jeton fixe d'une app personnalisée héritée.
+let cached = { token: '', expiresAt: 0 };
+let pending = null;
+
+async function fetchClientCredentialsToken() {
+  const res = await fetch(`https://${DOMAIN}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: CLIENT_ID, client_secret: CLIENT_SECRET }).toString(),
+  });
+  if (!res.ok) throw new Error(`Jeton Shopify refusé (HTTP ${res.status})`);
+  const json = await res.json();
+  if (!json.access_token) throw new Error('Jeton Shopify absent de la réponse');
+  const ttl = Number(json.expires_in || 3600);
+  cached = { token: json.access_token, expiresAt: Date.now() + Math.max(60, ttl - 300) * 1000 };
+  return cached.token;
+}
+
+async function getToken(force = false) {
+  if (CLIENT_ID && CLIENT_SECRET) {
+    if (!force && cached.token && Date.now() < cached.expiresAt) return cached.token;
+    if (!pending) pending = fetchClientCredentialsToken().finally(() => { pending = null; });
+    return pending;
+  }
+  return STATIC_TOKEN;
+}
 
 const gid = (type, id) => (String(id).startsWith('gid://') ? String(id) : `gid://shopify/${type}/${id}`);
 const legacyId = (g) => String(g || '').split('/').pop();
 
 async function graphql(query, variables = {}, attempt = 1) {
-  if (!DOMAIN || !TOKEN) throw new Error('SHOPIFY_STORE_DOMAIN / jeton Admin manquant');
+  const token = DOMAIN ? await getToken() : '';
+  if (!DOMAIN || !token) throw new Error('SHOPIFY_STORE_DOMAIN / accès Admin manquant');
   const res = await fetch(`https://${DOMAIN}/admin/api/${VERSION}/graphql.json`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': TOKEN },
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
     body: JSON.stringify({ query, variables }),
   });
+  // Jeton expiré ou révoqué : on en redemande un une fois
+  if (res.status === 401 && CLIENT_ID && attempt === 1) {
+    await getToken(true);
+    return graphql(query, variables, attempt + 1);
+  }
   // Limite de débit : on réessaie avec un délai croissant
   if (res.status === 429 || res.status >= 500) {
     if (attempt >= 5) throw new Error(`Shopify HTTP ${res.status} après ${attempt} tentatives`);
@@ -51,11 +89,35 @@ function assertNoUserErrors(payload, label) {
 
 /** Vérifie la signature d'un webhook Shopify (corps BRUT obligatoire). */
 function verifyShopifyWebhook(rawBody, hmacHeader) {
-  if (!WEBHOOK_SECRET || !hmacHeader || !rawBody) return false;
-  const digest = crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('base64');
-  const a = Buffer.from(digest);
+  if (!WEBHOOK_SECRETS.length || !hmacHeader || !rawBody) return false;
   const b = Buffer.from(String(hmacHeader));
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  return WEBHOOK_SECRETS.some((secret) => {
+    const a = Buffer.from(crypto.createHmac('sha256', secret).update(rawBody).digest('base64'));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  });
+}
+
+/**
+ * Abonne l'app au webhook « commande créée » (signé avec le secret client de l'app).
+ * Idempotent : ne crée rien si l'abonnement existe déjà.
+ */
+async function ensureOrderWebhook(callbackUrl) {
+  if (!CLIENT_ID || !CLIENT_SECRET) return { skipped: 'pas d\'app Dev Dashboard configurée' };
+  const data = await graphql(`{ webhookSubscriptions(first: 50, topics: [ORDERS_CREATE]) {
+    nodes { id endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } } } }`);
+  const exists = (data.webhookSubscriptions?.nodes || []).some((n) => n.endpoint?.callbackUrl === callbackUrl);
+  if (exists) return { exists: true };
+  const created = await graphql(
+    `mutation Sub($url: URL!) {
+      webhookSubscriptionCreate(topic: ORDERS_CREATE, webhookSubscription: { callbackUrl: $url, format: JSON }) {
+        webhookSubscription { id }
+        userErrors { field message }
+      }
+    }`,
+    { url: callbackUrl }
+  );
+  assertNoUserErrors(created.webhookSubscriptionCreate, 'webhookSubscriptionCreate');
+  return { created: true };
 }
 
 const ORDER_QUERY = `
@@ -178,6 +240,6 @@ async function addTags(orderId, tags) {
 }
 
 module.exports = {
-  graphql, gid, legacyId, verifyShopifyWebhook,
+  graphql, getToken, gid, legacyId, verifyShopifyWebhook, ensureOrderWebhook,
   getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, addTags, fulfillWithoutShipping,
 };
