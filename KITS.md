@@ -26,8 +26,13 @@ donc chaque renouvellement les contient. Changement de durée → proportions co
 |---|---|
 | `KITS_LIVE` | `true` pour activer la brique A (laisser `false` tant que pods-zero vend l'ancien ZÉRO) |
 | `SHOPIFY_STORE_DOMAIN` | ex. `testshopilol.myshopify.com` (déjà présente) |
-| `SHOPIFY_KITS_ACCESS_TOKEN` | jeton Admin API avec `read_orders`, `write_order_edits`, `write_merchant_managed_fulfillment_orders` (+ `write_third_party_fulfillment_orders` si MyLink est un service d'expédition) |
-| `SHOPIFY_WEBHOOK_SECRET` | clé de signature des webhooks Shopify |
+| `SHOPIFY_KITS_CLIENT_ID` | identifiant client de l'app « MyMOODz Recharges » (Dev Dashboard Shopify) |
+| `SHOPIFY_KITS_CLIENT_SECRET` | secret client de cette app : le serveur en tire un jeton Admin renouvelé automatiquement (24 h), et vérifie avec lui les webhooks créés par l'app |
+| `SHOPIFY_KITS_ACCESS_TOKEN` | (option de secours) jeton fixe d'une app héritée, utilisé seulement sans identifiants client |
+| `SHOPIFY_WEBHOOK_SECRET` | (optionnel) secret des webhooks créés à la main dans Paramètres > Notifications |
+
+Droits de l'app : `read_orders`, `write_orders`, `write_order_edits`, `write_merchant_managed_fulfillment_orders`, `write_third_party_fulfillment_orders`.
+Au démarrage, le serveur abonne l'app au webhook « commande créée » vers `/webhooks/shopify/orders` s'il n'existe pas.
 | `KITS_CUSTOMER_SECRET` | secret partagé avec la section « Mes saveurs » |
 | `KITS_ADMIN_KEY` | clé pour rejouer une commande |
 | `KITS_ALLOWED_ORIGINS` | facultatif, origines autorisées pour /kits |

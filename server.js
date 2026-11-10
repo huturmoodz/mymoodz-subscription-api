@@ -14,7 +14,7 @@ const {
 } = require('./core/sealWebhook');
 
 // ✅ Kits recharge ZÉRO (brique A : commandes / brique B : « Mes saveurs »)
-const { verifyShopifyWebhook } = require('./core/kits/shopify');
+const { verifyShopifyWebhook, ensureOrderWebhook } = require('./core/kits/shopify');
 const { processOrder } = require('./core/kits/orderFlow');
 const { syncSubscription } = require('./core/kits/subscriptionKit');
 const flavorsApi = require('./core/kits/flavorsApi');
@@ -259,4 +259,8 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`MyMoodz subscription API running on port ${PORT}`);
+  const base = (process.env.KITS_PUBLIC_URL || 'https://mymoodz-subscription-api.onrender.com').replace(/\/$/, '');
+  ensureOrderWebhook(base + '/webhooks/shopify/orders')
+    .then((r) => console.log('[kits] webhook commandes', JSON.stringify(r)))
+    .catch((e) => console.error('[kits] webhook commandes non créé :', e.message));
 });
