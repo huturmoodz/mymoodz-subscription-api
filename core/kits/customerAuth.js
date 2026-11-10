@@ -48,7 +48,7 @@ function requireCustomer(req, res, next) {
     return next();
   } catch (e) {
     console.error('[kits/auth]', e.message);
-    return res.status(500).json({ ok: false, error: 'Configuration serveur incomplète.' });
+    return res.status(503).json({ ok: false, error: 'Service bientôt disponible.' });
   }
 }
 
