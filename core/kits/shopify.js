@@ -79,7 +79,8 @@ query KitOrder($id: ID!) {
       nodes {
         id
         status
-        fulfillmentHolds { id handle }
+        fulfillmentHolds { id handle reasonNotes }
+        lineItems(first: 50) { nodes { id remainingQuantity lineItem { variant { id } } } }
       }
     }
   }
@@ -152,6 +153,20 @@ async function addVariantsToOrder(orderId, additions, staffNote) {
   return assertNoUserErrors(commit.orderEditCommit, 'orderEditCommit');
 }
 
+/** Marque une demande d'expédition comme traitée (sans suivi, sans e-mail au client). */
+async function fulfillWithoutShipping(foId, message) {
+  const data = await graphql(
+    `mutation Close($f: FulfillmentInput!, $m: String) {
+      fulfillmentCreate(fulfillment: $f, message: $m) {
+        fulfillment { id status }
+        userErrors { field message }
+      }
+    }`,
+    { f: { notifyCustomer: false, lineItemsByFulfillmentOrder: [{ fulfillmentOrderId: foId }] }, m: message }
+  );
+  return assertNoUserErrors(data.fulfillmentCreate, 'fulfillmentCreate');
+}
+
 async function addTags(orderId, tags) {
   const data = await graphql(
     `mutation Tags($id: ID!, $tags: [String!]!) {
@@ -164,5 +179,5 @@ async function addTags(orderId, tags) {
 
 module.exports = {
   graphql, gid, legacyId, verifyShopifyWebhook,
-  getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, addTags,
+  getOrder, holdFulfillmentOrder, releaseFulfillmentOrderHold, addVariantsToOrder, addTags, fulfillWithoutShipping,
 };
