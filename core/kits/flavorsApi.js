@@ -4,12 +4,13 @@
 // Le nombre total de boîtes est imposé par sa formule (1 mois = 4, 2 mois = 8, 3 mois = 12).
 
 const express = require('express');
-const { config, monthsOf } = require('./config');
+const { config, monthsOf, isParentVariant } = require('./config');
 const { validateComposition, totalOf } = require('./composition');
 const seal = require('./seal');
 const { analyse, storedPerUnit, applyToSubscription } = require('./subscriptionKit');
 const { requireCustomer } = require('./customerAuth');
 const { withLock } = require('./lock');
+const { changeFormula, formulaOptions, FormulaError } = require('./formula');
 
 const router = express.Router();
 
@@ -50,6 +51,7 @@ function view(sub) {
     target: monthsOf(parent.variant_id) * config.boxesPerMonth,
     composition: Object.fromEntries(perUnit),
     flavors: Object.entries(config.boxes).map(([variantId, b]) => ({ variantId, code: b.code, label: b.label })),
+    formulas: formulaOptions(parent.variant_id),
   };
 }
 
@@ -102,6 +104,29 @@ router.post('/subscriptions/:id/composition', async (req, res) => {
   } catch (e) {
     console.error('[kits/flavors] modification', id, e.message, e.seal || '');
     return res.status(502).json({ ok: false, error: "La modification n'a pas pu être enregistrée. Réessayez dans un instant." });
+  }
+});
+
+// Changer de formule (1, 2 ou 3 mois) : fréquence, ligne Recharge et nombre de boîtes, mélange gardé.
+router.post('/subscriptions/:id/formula', async (req, res) => {
+  const id = String(req.params.id || '');
+  const variantId = String(req.body?.variantId || '');
+  if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: 'Abonnement invalide.' });
+  if (!isParentVariant(variantId)) return res.status(400).json({ ok: false, error: 'Formule invalide.' });
+  try {
+    const result = await withLock(`sub:${id}`, async () => {
+      const sub = await seal.getSubscription(id);
+      if (!owns(sub, req.customer)) return { status: 404, body: { ok: false, error: 'Abonnement introuvable.' } };
+      const r = await changeFormula(sub, variantId);
+      const fresh = await seal.getSubscription(id);
+      console.log('[kits/flavors] formule', id, r);
+      return { status: 200, body: { ok: true, result: r, subscription: view(fresh) } };
+    });
+    return res.status(result.status).json(result.body);
+  } catch (e) {
+    if (e instanceof FormulaError) return res.status(400).json({ ok: false, error: e.message });
+    console.error('[kits/flavors] formule', id, e.message, e.seal || '');
+    return res.status(502).json({ ok: false, error: "Le changement de formule n'a pas pu être enregistré. Réessaie dans un instant, rien n'a été modifié." });
   }
 });
 
