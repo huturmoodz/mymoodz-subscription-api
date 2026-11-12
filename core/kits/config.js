@@ -16,7 +16,7 @@ const DEFAULT_CONFIG = {
   // Produit « boîte » : une variante par saveur. Ce sont les vrais articles physiques (SKU MyLink).
   boxProductId: '11785293332821',
   boxes: {
-    '55665971560789': { code: 'MEN', label: 'Menthe Poivrée', sku: 'POD-ZERO-MEN-03' },
+    '55665971560789': { code: 'MEN', label: 'Menthe', sku: 'POD-ZERO-MEN-03' },
     '55665971593557': { code: 'CIT', label: 'Citron', sku: 'POD-ZERO-CIT-03' },
     '55665971626325': { code: 'PAS', label: 'Pastèque', sku: 'POD-ZERO-PAS-03' },
     '55665971659093': { code: 'FRA', label: 'Framboise', sku: 'POD-ZERO-FRA-03' },
