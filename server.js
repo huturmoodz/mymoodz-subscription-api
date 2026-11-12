@@ -19,6 +19,8 @@ const { processOrder } = require('./core/kits/orderFlow');
 const { syncSubscription } = require('./core/kits/subscriptionKit');
 const flavorsApi = require('./core/kits/flavorsApi');
 const { requireCustomer } = require('./core/kits/customerAuth');
+// ✅ Stock des packs recalculé à partir des composants (MyLink)
+const stockSync = require('./core/stock/sync');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -123,6 +125,21 @@ app.post('/webhooks/shopify/orders', express.raw({ type: '*/*' }), async (req, r
   }
 });
 
+/**
+ * ✅ Webhook Shopify « niveau de stock modifié » : recalcul du stock des packs (STOCK_SYNC_MODE ≠ off).
+ */
+app.post('/webhooks/shopify/inventory', express.raw({ type: '*/*' }), (req, res) => {
+  if (!verifyShopifyWebhook(req.body, req.header('X-Shopify-Hmac-Sha256'))) {
+    return res.status(401).send('invalid hmac');
+  }
+  res.status(200).send('ok');
+  try {
+    stockSync.onInventoryWebhook(JSON.parse(req.body.toString('utf-8')));
+  } catch (err) {
+    console.error('[stock webhook] ERROR', err?.message || err);
+  }
+});
+
 // JSON pour le reste de l'API (taille limitée)
 app.use(express.json({ limit: '50kb' }));
 
@@ -145,6 +162,19 @@ app.post('/admin/kits/orders/:id/reprocess', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message, details: e.userErrors || null });
   }
+});
+
+// ✅ Stock des packs : aperçu (n'écrit jamais) et synchro manuelle (écrit seulement en mode live)
+const adminOk = (req) => process.env.KITS_ADMIN_KEY && req.get('x-admin-key') === process.env.KITS_ADMIN_KEY;
+app.get('/admin/stock/preview', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ ok: false });
+  try { return res.json({ ok: true, report: await stockSync.run({ write: false }) }); }
+  catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/admin/stock/sync', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ ok: false });
+  try { return res.json({ ok: true, report: await stockSync.run() }); }
+  catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // -------- Routes de base --------
@@ -267,4 +297,12 @@ app.listen(PORT, () => {
     .ensureSealWebhook('subscription/updated', base + '/webhooks/seal/subscription-updated')
     .then((r) => console.log('[kits] webhook Seal abonnement modifié', JSON.stringify(r)))
     .catch((e) => console.error('[kits] webhook Seal non créé :', e.message, JSON.stringify(e.seal || '')));
+  // Stock des packs : seulement si activé (STOCK_SYNC_MODE=dry ou live)
+  if (stockSync.mode() !== 'off') {
+    stockSync.ensureInventoryWebhook(base + '/webhooks/shopify/inventory')
+      .then((r) => console.log('[stock] webhook stock', r))
+      .catch((e) => console.error('[stock] webhook stock non créé (droit read_inventory ?) :', e.message));
+    stockSync.schedule(30000);
+    setInterval(() => stockSync.schedule(1000), 30 * 60 * 1000);
+  }
 });
