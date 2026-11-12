@@ -13,6 +13,15 @@ const DEFAULT_CONFIG = {
     '55725002948949': { months: 3, label: 'Recharge ZÉRO Saveurs 3 mois', sku: 'REC-ZERO-3M' },
   },
   boxesPerMonth: 4,
+  // Produit « Recharge ZÉRO Saveurs » (porte les 3 variantes de durée ci-dessus).
+  parentProductId: '11795146178901',
+  // Prix d'abonnement de chaque formule (règles Seal « Recharge ZÉRO Saveurs »), utilisés quand
+  // l'abonné change de formule depuis « Mes saveurs ». Surchargeables par KITS_CONFIG.
+  formulaPrices: {
+    '55725002883413': '49.90',
+    '55725002916181': '89.80',
+    '55725002948949': '119.70',
+  },
   // Produit « boîte » : une variante par saveur. Ce sont les vrais articles physiques (SKU MyLink).
   boxProductId: '11785293332821',
   boxes: {

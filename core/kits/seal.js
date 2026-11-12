@@ -45,6 +45,8 @@ const put = (body) => callSeal('/subscription', { method: 'PUT', body: JSON.stri
 const addItems = (id, items) => put({ id: Number(id), action: 'add_items', add_items: items });
 const removeItems = (id, itemIds) => put({ id: Number(id), action: 'remove_items', remove_items: itemIds.map(Number) });
 const editItems = (id, items) => put({ id: Number(id), action: 'edit_items', edit_items: items });
+/** Modifie les champs de l'abonnement lui-même (fréquence de livraison et de facturation…). */
+const editSubscription = (id, edit) => put({ id: Number(id), action: 'edit', edit });
 
 /** Fusionne des note_attributes sans écraser celles des autres fonctions (cadeau, etc.). */
 async function upsertNotes(id, upserts) {
@@ -94,4 +96,4 @@ const getItemProp = (item, key) => {
 };
 
 module.exports = {
-  ensureSealWebhook, callSeal, getSubscription, findSubscriptionsByEmail, addItems, removeItems, editItems, upsertNotes, getNote, getItemProp };
+  ensureSealWebhook, callSeal, getSubscription, findSubscriptionsByEmail, addItems, removeItems, editItems, editSubscription, upsertNotes, getNote, getItemProp };
