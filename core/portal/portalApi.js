@@ -42,6 +42,9 @@ function view(sub, paquetsParJour) {
     contenu: ov.contenu(sub),
     progression: ov.progression(sub, Date.now(), cfg, paquetsParJour),
     decalages_jours: cfg.decalages_jours || [7, 15],
+    adresse: ov.adresse(sub),
+    // Lien Seal propre à cet abonné (modifier adresse, paiement…). Renvoyé seulement à son propriétaire.
+    modifier_url: sub.edit_url || null,
   };
 }
 

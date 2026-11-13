@@ -27,7 +27,7 @@ test('prochaine livraison sautée : signalée comme telle (le portail propose «
     { ...base, id: 2, skipped: '1' },
     { ...base, id: 3, date: '2027-01-10T12:00:00+00:00' },
   ] };
-  assert.deepEqual(ov.nextAttempt(sub), { id: '2', date: '2026-12-10T12:00:00+00:00', skipped: true });
+  assert.deepEqual(ov.nextAttempt(sub), { id: '2', date: '2026-12-10T12:00:00+00:00', skipped: true, suivante: '2027-01-10T12:00:00+00:00' });
 });
 
 test('décaler : Seal reçoit date + heure + fuseau (sans heure, Seal refuse : « Time is missing »)', () => {
@@ -35,4 +35,23 @@ test('décaler : Seal reçoit date + heure + fuseau (sans heure, Seal refuse : �
   assert.deepEqual(ov.shiftSlot('2026-12-28T23:30:00+00:00', 7), { date: '2027-01-04', time: '23:30', timezone: '+00:00' });
   assert.deepEqual(ov.shiftSlot('2026-11-30', 15), { date: '2026-12-15', time: '12:00', timezone: '+00:00' });
   assert.equal(ov.shiftSlot('pas une date', 7), null);
+});
+
+test('livraison sautée : la vraie prochaine livraison est donnée (la suivante non sautée)', () => {
+  const sub = { billing_attempts: [
+    { ...base, id: 2, date: '2026-12-10T11:00:00+00:00', skipped_on: '2026-11-13 14:00:08' },
+    { ...base, id: 3, date: '2027-01-10T11:00:00+00:00', skipped_on: '2026-11-13 14:01:00' },
+    { ...base, id: 4, date: '2027-02-10T11:00:00+00:00', skipped_on: null },
+  ] };
+  const n = ov.nextAttempt(sub);
+  assert.equal(n.skipped, true);
+  assert.equal(n.suivante, '2027-02-10T11:00:00+00:00');
+  assert.equal(ov.nextAttempt({ billing_attempts: [{ ...base, id: 9 }] }).suivante, undefined);
+});
+
+test('adresse de livraison : lue dans les champs Seal s_*, absente → null', () => {
+  assert.deepEqual(ov.adresse({ s_first_name: 'Hugo', s_last_name: 'D', s_address1: '71 quai de la Gare', s_address2: '', s_zip: '75013', s_city: 'Paris', s_country: 'France' }),
+    { nom: 'Hugo D', lignes: ['71 quai de la Gare'], ville: '75013 Paris', pays: 'France' });
+  assert.equal(ov.adresse({ s_address1: '' }), null);
+  assert.equal(ov.adresse({}), null);
 });
