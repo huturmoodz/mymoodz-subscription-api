@@ -4,6 +4,10 @@
 // franchir ce cap, une seule fois par client.
 // Les paliers se comptent en MOIS couverts, pas en colis : un colis « 3 mois » compte 3 mois. Ainsi
 // la formule 3 mois atteint ses cadeaux plus vite (palier 3 mois dès son 1er colis), jamais plus lentement.
+// Ancienneté du client, toutes gammes confondues (ZÉRO Saveurs et RITUEL) : chaque colis d'abonnement couvre
+// une période (date du colis + durée de sa formule) ; on compte la durée couverte par au moins un abonnement.
+// Deux abonnements en parallèle ne vont donc pas deux fois plus vite, et changer de rituel ne remet rien à zéro.
+// L'ancienne gamme ne compte pas, sauf si REWARDS_ANCIENNE_GAMME=true.
 //
 // Où ça se branche : webhook « commande créée / modifiée », AVANT le traitement des kits.
 // À ce moment, la commande est encore en attente (règle Flow « MMZ-KIT ») : MyLink ne l'a pas.
@@ -25,7 +29,7 @@
 // _mmz_test=1 : les vrais clients ne reçoivent rien), live (ajoute réellement le cadeau).
 
 const shopify = require('../kits/shopify');
-const { config, isParentVariant, isBoxVariant, monthsOf } = require('../kits/config');
+const { config, isParentVariant, isBoxVariant, monthsOf, rituelOf } = require('../kits/config');
 const seal = require('../kits/seal');
 const { withLock } = require('../kits/lock');
 const { loadTiers, offrable } = require('./tiers');
@@ -86,40 +90,90 @@ function pickVariant(tier, { chosenId = null, counts = new Map() } = {}) {
   return best || tier.produit;
 }
 
-/** Une livraison d'abonnement = commande non annulée avec une ligne Recharge vendue par abonnement. */
+const withOldRange = () => String(process.env.REWARDS_ANCIENNE_GAMME || '').toLowerCase() === 'true';
+
+/** Mois couverts par UNE unité de la ligne si elle compte pour la fidélité (0 sinon). */
+function monthsOfLine(l) {
+  if (!l.sellingPlan || qtyOf(l) <= 0) return 0;
+  const v = vid(l);
+  if (isParentVariant(v)) return monthsOf(v);
+  const r = rituelOf(v);
+  if (r) return r.months;
+  if (withOldRange() && !isBoxVariant(v)) {
+    const m = String(l.variant?.title || '').match(/(\d+)\s*mois/i);
+    return m ? Number(m[1]) : 1;
+  }
+  return 0;
+}
+
+/** Une livraison d'abonnement = commande non annulée avec une ligne d'abonnement qui compte pour la fidélité. */
 function isSubscriptionDelivery(order) {
   if (!order || order.cancelledAt) return false;
-  return (order.lineItems?.nodes || []).some((l) => isParentVariant(vid(l)) && l.sellingPlan && qtyOf(l) > 0);
+  return (order.lineItems?.nodes || []).some((l) => monthsOfLine(l) > 0);
 }
 
 const isTest = (order) => (order.tags || []).includes('mmz-test')
   || (order.customAttributes || []).some((a) => a.key === '_mmz_test' && String(a.value) === '1');
 
-/** Mois d'abonnement couverts par une commande (Recharge 1, 2 ou 3 mois × quantité). */
+/**
+ * Mois couverts par un colis : la plus longue de ses lignes (durée × quantité). Deux produits dans le
+ * même colis couvrent la même période ; une Recharge en quantité 2 couvre deux fois sa durée.
+ */
 function monthsOfOrder(order) {
   if (!isSubscriptionDelivery(order)) return 0;
-  return (order.lineItems?.nodes || [])
-    .filter((l) => isParentVariant(vid(l)) && l.sellingPlan && qtyOf(l) > 0)
-    .reduce((s, l) => s + monthsOf(vid(l)) * qtyOf(l), 0);
+  return Math.max(0, ...(order.lineItems?.nodes || []).map((l) => monthsOfLine(l) * qtyOf(l)));
 }
 
-/** Mois déjà couverts AVANT « order » (commandes d'abonnement plus anciennes du client). */
-function monthsBefore(history, order) {
+const DAY = 86400000;
+function plusMonths(ms, n) {
+  const d = new Date(ms);
+  const day = d.getUTCDate();
+  const first = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1, d.getUTCHours(), d.getUTCMinutes());
+  const last = new Date(Date.UTC(new Date(first).getUTCFullYear(), new Date(first).getUTCMonth() + 1, 0)).getUTCDate();
+  return first + (Math.min(day, last) - 1) * DAY;
+}
+
+/**
+ * Ancienneté en mois : durée couverte par au moins un colis d'abonnement (union des périodes
+ * [date du colis, date + durée de sa formule]). Les trous (pause, arrêt) ne comptent pas.
+ */
+function coveredMonths(orders) {
+  const spans = orders.map((o) => {
+    const start = new Date(o.createdAt).getTime();
+    return [start, plusMonths(start, monthsOfOrder(o))];
+  }).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  let total = 0;
+  let cur = null;
+  for (const [a, b] of spans) {
+    if (!cur || a > cur[1]) { if (cur) total += cur[1] - cur[0]; cur = [a, b]; }
+    else cur[1] = Math.max(cur[1], b);
+  }
+  if (cur) total += cur[1] - cur[0];
+  // 30,44 jours par mois en moyenne ; la petite marge absorbe les mois courts (février)
+  return Math.floor(total / DAY / 30.4375 + 0.1);
+}
+
+/** Colis d'abonnement du client avant « order » (non annulés ; les commandes de test seulement entre elles). */
+function deliveriesBefore(history, order) {
   const t = new Date(order.createdAt).getTime();
   const withTests = isTest(order);
   return history.filter((o) => o.id !== order.id
     && isSubscriptionDelivery(o)
     && new Date(o.createdAt).getTime() < t
-    && (withTests || !isTest(o)))
-    .reduce((s, o) => s + monthsOfOrder(o), 0);
+    && (withTests || !isTest(o)));
 }
+
+/** Mois d'ancienneté AVANT « order ». */
+const monthsBefore = (history, order) => coveredMonths(deliveriesBefore(history, order));
+/** Mois d'ancienneté APRÈS « order » (ce colis compris). */
+const monthsAfter = (history, order) => coveredMonths([...deliveriesBefore(history, order), order]);
 
 /** Pour le portail : mois couverts, nombre de colis, et mois couverts par le dernier colis (sa formule). */
 function soFar(history, { withTests = false } = {}) {
   const subs = history.filter((o) => isSubscriptionDelivery(o) && (withTests || !isTest(o)))
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   return {
-    mois: subs.reduce((s, o) => s + monthsOfOrder(o), 0),
+    mois: coveredMonths(subs),
     colis: subs.length,
     moisParColis: subs.length ? monthsOfOrder(subs[subs.length - 1]) : 1,
     depuis: subs.length ? subs[0].createdAt : null,   // 1re commande d'abonnement
@@ -175,7 +229,7 @@ const ORDER_QUERY = `query CadeauCommande($id: ID!) {
     id name email createdAt cancelledAt tags displayFulfillmentStatus
     customAttributes { key value }
     customer { id }
-    lineItems(first: 100) { nodes { id quantity currentQuantity variant { id } sellingPlan { sellingPlanId } } }
+    lineItems(first: 100) { nodes { id quantity currentQuantity variant { id title } sellingPlan { sellingPlanId } } }
     fulfillmentOrders(first: 20) { nodes { id status fulfillmentHolds { handle reasonNotes } } }
   }
 }`;
@@ -186,7 +240,7 @@ const HISTORY_QUERY = `query CadeauHistorique($q: String!, $after: String) {
     nodes {
       id createdAt cancelledAt tags
       customAttributes { key value }
-      lineItems(first: 30) { nodes { quantity currentQuantity variant { id } sellingPlan { sellingPlanId } } }
+      lineItems(first: 30) { nodes { quantity currentQuantity variant { id title } sellingPlan { sellingPlanId } } }
     }
   }
 }`;
@@ -324,7 +378,7 @@ async function applyToOrder(orderId, { force } = {}) {
 
       const history = await customerHistory(order.customer.id);
       const before = monthsBefore(history, order);
-      const after = before + monthsOfOrder(order);
+      const after = monthsAfter(history, order);
       const granted = grantedHandles(history);
       const lines = order.lineItems?.nodes || [];
       const result = { order: order.name, mois_avant: before, mois_apres: after, offerts: [], reportes: [], mode: m };
@@ -381,5 +435,5 @@ async function statusFor(customerId) {
 module.exports = {
   mode, applyToOrder, statusFor, loadTiers, choiceNote, pickVariant, flavourCounts,
   // calculs purs (tests)
-  isSubscriptionDelivery, monthsOfOrder, monthsBefore, soFar, grantedHandles, decide, status, stillHeld, tagOf,
+  isSubscriptionDelivery, monthsOfOrder, monthsBefore, monthsAfter, coveredMonths, soFar, grantedHandles, decide, status, stillHeld, tagOf,
 };
