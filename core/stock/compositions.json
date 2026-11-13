@@ -1,0 +1,212 @@
+{
+  "_lisezmoi": [
+    "Composition de chaque produit vendu (SKU Shopify) en composants physiques stockés chez MyLink.",
+    "Mêmes bundles que le fichier de paramétrage envoyé à MyLink : toute modification se fait ici ET chez MyLink.",
+    "Ajouter un produit = ajouter une ligne dans « produits », sans toucher au code.",
+    "Pack fixe : { \"SKU-COMPOSANT\": quantité, ... } -> stock du pack = le composant le plus limitant.",
+    "Boîtes au choix (recharge à composer) : { \"au_choix_parmi\": [composants], \"nombre_de_boites\": N } -> stock = total des boîtes / N ; le composeur bloque lui-même chaque saveur à son propre stock.",
+    "« composants_dans_shopify » : où lire le stock d'un composant quand son SKU Shopify n'est pas le même que chez MyLink. Absent = même SKU."
+  ],
+  "composants_dans_shopify": {
+    "BTE-ZERO-MEN-03": "POD-ZERO-MEN-03",
+    "BTE-ZERO-CIT-03": "POD-ZERO-CIT-03",
+    "BTE-ZERO-PAS-03": "POD-ZERO-PAS-03",
+    "BTE-ZERO-FRA-03": "POD-ZERO-FRA-03"
+  },
+  "produits": {
+    "PACK-ZERO-MEN-03": {
+      "BTE-ZERO-MEN-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-ZERO-CIT-03": {
+      "BTE-ZERO-CIT-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-ZERO-PAS-03": {
+      "BTE-ZERO-PAS-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-ZERO-FRA-03": {
+      "BTE-ZERO-FRA-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-ZERO-MIX-12": {
+      "BTE-ZERO-MEN-03": 1,
+      "BTE-ZERO-CIT-03": 1,
+      "BTE-ZERO-PAS-03": 1,
+      "BTE-ZERO-FRA-03": 1
+    },
+    "PACK-ZERO-MIX-24": {
+      "BTE-ZERO-MEN-03": 2,
+      "BTE-ZERO-CIT-03": 2,
+      "BTE-ZERO-PAS-03": 2,
+      "BTE-ZERO-FRA-03": 2
+    },
+    "REC-ZERO-1M": {
+      "au_choix_parmi": [
+        "BTE-ZERO-MEN-03",
+        "BTE-ZERO-CIT-03",
+        "BTE-ZERO-PAS-03",
+        "BTE-ZERO-FRA-03"
+      ],
+      "nombre_de_boites": 4
+    },
+    "REC-ZERO-2M": {
+      "au_choix_parmi": [
+        "BTE-ZERO-MEN-03",
+        "BTE-ZERO-CIT-03",
+        "BTE-ZERO-PAS-03",
+        "BTE-ZERO-FRA-03"
+      ],
+      "nombre_de_boites": 8
+    },
+    "REC-ZERO-3M": {
+      "au_choix_parmi": [
+        "BTE-ZERO-MEN-03",
+        "BTE-ZERO-CIT-03",
+        "BTE-ZERO-PAS-03",
+        "BTE-ZERO-FRA-03"
+      ],
+      "nombre_de_boites": 12
+    },
+    "PACK-RIT-BN-03": {
+      "BTE-RIT-BN-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-RIT-BN-12": {
+      "BTE-RIT-BN-03": 4
+    },
+    "PACK-RIT-BN-24": {
+      "BTE-RIT-BN-03": 8
+    },
+    "POD-RIT-BN-12": {
+      "BTE-RIT-BN-03": 4
+    },
+    "POD-RIT-BN-24": {
+      "BTE-RIT-BN-03": 8
+    },
+    "POD-RIT-BN-36": {
+      "BTE-RIT-BN-03": 12
+    },
+    "PACK-RIT-BE-03": {
+      "BTE-RIT-BE-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-RIT-BE-12": {
+      "BTE-RIT-BE-03": 4
+    },
+    "PACK-RIT-BE-24": {
+      "BTE-RIT-BE-03": 8
+    },
+    "POD-RIT-BE-12": {
+      "BTE-RIT-BE-03": 4
+    },
+    "POD-RIT-BE-24": {
+      "BTE-RIT-BE-03": 8
+    },
+    "POD-RIT-BE-36": {
+      "BTE-RIT-BE-03": 12
+    },
+    "PACK-RIT-IC-03": {
+      "BTE-RIT-IC-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-RIT-IC-12": {
+      "BTE-RIT-IC-03": 4
+    },
+    "PACK-RIT-IC-24": {
+      "BTE-RIT-IC-03": 8
+    },
+    "POD-RIT-IC-12": {
+      "BTE-RIT-IC-03": 4
+    },
+    "POD-RIT-IC-24": {
+      "BTE-RIT-IC-03": 8
+    },
+    "POD-RIT-IC-36": {
+      "BTE-RIT-IC-03": 12
+    },
+    "PACK-RIT-PF-03": {
+      "BTE-RIT-PF-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-RIT-PF-12": {
+      "BTE-RIT-PF-03": 4
+    },
+    "PACK-RIT-PF-24": {
+      "BTE-RIT-PF-03": 8
+    },
+    "POD-RIT-PF-12": {
+      "BTE-RIT-PF-03": 4
+    },
+    "POD-RIT-PF-24": {
+      "BTE-RIT-PF-03": 8
+    },
+    "POD-RIT-PF-36": {
+      "BTE-RIT-PF-03": 12
+    },
+    "PACK-RIT-MIX-12": {
+      "BTE-RIT-BN-03": 1,
+      "BTE-RIT-BE-03": 1,
+      "BTE-RIT-IC-03": 1,
+      "BTE-RIT-PF-03": 1
+    },
+    "PACK-RIT-MIX-24": {
+      "BTE-RIT-BN-03": 2,
+      "BTE-RIT-BE-03": 2,
+      "BTE-RIT-IC-03": 2,
+      "BTE-RIT-PF-03": 2
+    },
+    "PACK-ZERO-03": {
+      "BTE-ANC-ZERO-03": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-ZERO-12": {
+      "BTE-ANC-ZERO-03": 4
+    },
+    "PACK-ZERO-24": {
+      "BTE-ANC-ZERO-03": 8
+    },
+    "POD-ZERO-12": {
+      "BTE-ANC-ZERO-03": 4
+    },
+    "POD-ZERO-24": {
+      "BTE-ANC-ZERO-03": 8
+    },
+    "POD-ZERO-36": {
+      "BTE-ANC-ZERO-03": 12
+    },
+    "PACK-BN-03": {
+      "BTE-ANC-BN-01": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-BN-09": {
+      "BTE-ANC-BN-03": 1
+    },
+    "POD-BN-03": {
+      "BTE-ANC-BN-01": 1
+    },
+    "POD-BN-06": {
+      "BTE-ANC-BN-01": 2
+    },
+    "POD-BN-09": {
+      "BTE-ANC-BN-03": 1
+    },
+    "PACK-BE-03": {
+      "BTE-ANC-BE-01": 1,
+      "DIFF-RECH": 1
+    },
+    "PACK-BE-09": {
+      "BTE-ANC-BE-03": 1
+    },
+    "POD-BE-03": {
+      "BTE-ANC-BE-01": 1
+    },
+    "POD-BE-06": {
+      "BTE-ANC-BE-01": 2
+    },
+    "POD-BE-09": {
+      "BTE-ANC-BE-03": 1
+    }
+  }
+}
