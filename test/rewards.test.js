@@ -172,3 +172,18 @@ test('mode test : seules les commandes de test reçoivent le cadeau', async () =
   assert.ok(calls.includes('commit'));
   process.env.REWARDS_MODE = 'off';
 });
+
+test('boîte offerte au choix : saveur choisie, sinon saveur préférée du colis, sinon produit de la fiche', () => {
+  const opt = (id, saveur) => ({ id: String(id), sku: `BTE-ZERO-${saveur.slice(0, 3).toUpperCase()}-03`, price: '0.00', title: saveur, inventoryPolicy: 'DENY', inventoryQuantity: 0, inventoryItem: { tracked: false } });
+  const nodes = [opt(11, 'Menthe'), opt(12, 'Citron'), opt(13, 'Pastèque'), opt(14, 'Framboise')];
+  const ref = { ...opt(11, 'Menthe'), id: 'gid://shopify/ProductVariant/11', product: { title: 'Boîte offerte', status: 'DRAFT', variants: { nodes: nodes.map((n) => ({ ...n, id: `gid://shopify/ProductVariant/${n.id}` })) } } };
+  const t = tiersMod.normalize(meta('palier-3', { nom: 'P3', actif: true, mois: 3, titre_client: 'Une boîte', produit_offert: 'x' }, ref));
+  assert.equal(t.auChoix, true);
+  assert.equal(t.options.length, 4);
+  assert.equal(eng.pickVariant(t, { chosenId: '13' }).saveur, 'Pastèque');               // choisie
+  const counts = eng.flavourCounts([{ variant_id: '55665971593557', quantite: 3 }, { variant_id: '55665971560789', quantite: 1 }]);
+  assert.equal(eng.pickVariant(t, { counts }).saveur, 'Citron');                           // préférée : 3 Citron
+  assert.equal(eng.pickVariant(t, {}).id, '11');                                           // sinon la fiche (Menthe)
+  const v = eng.status({ tiers: [t], n: 1, granted: new Set() });
+  assert.deepEqual(v.paliers[0].choix.map((c) => c.saveur), ['Menthe', 'Citron', 'Pastèque', 'Framboise']);
+});
