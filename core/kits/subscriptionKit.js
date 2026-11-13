@@ -66,16 +66,19 @@ function boxItem(variantId, quantity) {
   };
 }
 
+const sameBoxes = (a, b) => {
+  const { add, remove } = diff(a, b);
+  return add.size === 0 && remove.size === 0;
+};
+
 /**
- * Aligne les boîtes du contrat Seal sur la composition voulue.
- * @param {object} sub abonnement Seal (avec items)
- * @param {Map} perUnit composition pour UNE unité de la recharge
+ * Un passage : envoie à Seal les changements pour aller des boîtes de « sub » vers « wanted ».
+ * Ordre important : modifications et ajouts d'abord, retraits EN DERNIER. Seal peut renuméroter
+ * les lignes après un retrait : une modification envoyée ensuite visait une ligne disparue et Seal
+ * l'ignorait sans erreur (constaté le 13/11 : 2 Menthe + 2 Citron → 4 Menthe donnait 2 Menthe).
  */
-async function applyToSubscription(sub, perUnit) {
-  const { parents, boxes } = analyse(sub);
-  const parent = parents[0];
-  const parentQty = parents.reduce((s, p) => s + Number(p.quantity || 0), 0);
-  const wanted = scale(perUnit, parentQty);
+async function alignBoxesOnce(sub, wanted) {
+  const { boxes } = analyse(sub);
   const current = currentBoxMap(boxes);
   const { add, remove } = diff(wanted, current);
 
@@ -107,9 +110,41 @@ async function applyToSubscription(sub, perUnit) {
     lines.slice(1).forEach((l) => removals.push(l.id));
   }
 
-  if (removals.length) await seal.removeItems(sub.id, removals);
   if (edits.length) await seal.editItems(sub.id, edits);
   if (adds.length) await seal.addItems(sub.id, adds);
+  if (removals.length) await seal.removeItems(sub.id, removals);
+}
+
+const MAX_PASSES = 3;
+
+/**
+ * Aligne les boîtes du contrat Seal sur la composition voulue, puis VÉRIFIE en relisant Seal.
+ * Seule la relecture fait foi : si Seal n'a pas tout pris en compte, on refait un passage avec les
+ * lignes fraîches (3 au plus). Toujours pas aligné → erreur, et la note n'est PAS écrite : le webhook
+ * « abonnement modifié » remet alors le contrat sur la dernière composition enregistrée.
+ * @param {object} sub abonnement Seal (avec items)
+ * @param {Map} perUnit composition pour UNE unité de la recharge
+ */
+async function applyToSubscription(sub, perUnit) {
+  const { parents } = analyse(sub);
+  const parentQty = parents.reduce((s, p) => s + Number(p.quantity || 0), 0);
+  const wanted = scale(perUnit, parentQty);
+
+  let cur = sub;
+  let touched = false;
+  for (let pass = 0; ; pass += 1) {
+    const now = currentBoxMap(analyse(cur).boxes);
+    if (sameBoxes(wanted, now)) break;
+    if (pass === MAX_PASSES) {
+      throw new Error(`boîtes non alignées après ${MAX_PASSES} passages : voulu ${describe(wanted)}, contrat ${describe(now) || 'vide'}`);
+    }
+    if (pass > 0) console.warn('[kits/seal] contrat pas encore aligné, nouveau passage', sub.id, describe(now));
+    await alignBoxesOnce(cur, wanted);
+    touched = true;
+    cur = await seal.getSubscription(sub.id);
+  }
+  // Lignes relues : la ligne Recharge a pu changer d'identifiant
+  const parent = analyse(cur).parents[0];
 
   // La ligne Recharge affiche « Saveurs : … » sur les commandes et e-mails de renouvellement :
   // on la met à jour pour qu'elle corresponde aux boîtes réellement envoyées.
@@ -137,14 +172,14 @@ async function applyToSubscription(sub, perUnit) {
   // On n'écrit la note que si elle change : chaque écriture redéclenche le webhook « abonnement modifié »,
   // et une écriture systématique créerait une boucle sans fin.
   const noteValue = `${parent.variant_id}|${stringifyComposition(perUnit)}`;
-  if (seal.getNote(sub, config.sealNotes.compo) !== noteValue || seal.getNote(sub, config.sealNotes.seeded) !== '1') {
+  if (seal.getNote(cur, config.sealNotes.compo) !== noteValue || seal.getNote(cur, config.sealNotes.seeded) !== '1') {
     await seal.upsertNotes(sub.id, [
       { name: config.sealNotes.compo, value: noteValue },
       { name: config.sealNotes.seeded, value: '1' },
     ]);
   }
 
-  return { changed: !!(removals.length || edits.length || adds.length), wanted: describe(wanted) };
+  return { changed: touched, wanted: describe(wanted) };
 }
 
 /**
