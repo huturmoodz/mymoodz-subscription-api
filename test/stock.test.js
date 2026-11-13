@@ -17,6 +17,15 @@ test('pack fixe : le composant le plus rare décide ; composant inconnu → on n
   assert.equal(t['PACK-RIT-MIX-12'], null);         // boîtes RITUEL inconnues
 });
 
+test('plus de Citron : seul le pack 7 jours Citron et les mélanges 4 saveurs ferment ; les autres saveurs restent en vente', () => {
+  const t = computeTargets(buildBundles(), { 'BTE-ZERO-MEN-03': 20, 'BTE-ZERO-CIT-03': 0, 'BTE-ZERO-PAS-03': 20, 'BTE-ZERO-FRA-03': 20, 'DIFF-RECH': 50 });
+  assert.equal(t['PACK-ZERO-CIT-03'], 0);
+  assert.equal(t['PACK-ZERO-MEN-03'], 20);
+  assert.equal(t['PACK-ZERO-PAS-03'], 20);
+  assert.equal(t['PACK-ZERO-MIX-12'], 0);           // le mélange des 4 a besoin d'un Citron
+  assert.equal(t['REC-ZERO-1M'], 15);               // recharge : 60 boîtes restantes / 4, le composeur grise le Citron
+});
+
 test('stock négatif ou nul → 0, jamais négatif', () => {
   const t = computeTargets({ X: { type: 'fixed', parts: [{ sku: 'A', qty: 4 }] } }, { A: -12 });
   assert.equal(t.X, 0);
