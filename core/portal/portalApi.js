@@ -123,6 +123,7 @@ act('decaler', async (sub, body) => {
   if (!active(sub)) return "L'abonnement n'est pas actif.";
   const next = ov.nextAttempt(sub);
   if (!next?.id) return 'Aucune livraison à décaler.';
+  if (next.skipped) return 'Cette livraison est sautée : reprends-la d\'abord pour la décaler.';
   const date = ov.shiftDate(next.date, days);
   if (!date) return 'Date de livraison illisible.';
   await actions.reschedule(sub.id, next.id, date);
