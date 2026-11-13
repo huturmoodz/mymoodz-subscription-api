@@ -124,9 +124,9 @@ act('decaler', async (sub, body) => {
   const next = ov.nextAttempt(sub);
   if (!next?.id) return 'Aucune livraison à décaler.';
   if (next.skipped) return 'Cette livraison est sautée : reprends-la d\'abord pour la décaler.';
-  const date = ov.shiftDate(next.date, days);
-  if (!date) return 'Date de livraison illisible.';
-  await actions.reschedule(sub.id, next.id, date);
+  const slot = ov.shiftSlot(next.date, days);
+  if (!slot) return 'Date de livraison illisible.';
+  await actions.reschedule(sub.id, next.id, slot.date, slot.time, slot.timezone);
   return null;
 });
 
