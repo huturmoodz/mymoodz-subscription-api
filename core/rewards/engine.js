@@ -25,7 +25,8 @@
 // _mmz_test=1 : les vrais clients ne reçoivent rien), live (ajoute réellement le cadeau).
 
 const shopify = require('../kits/shopify');
-const { isParentVariant, monthsOf } = require('../kits/config');
+const { config, isParentVariant, isBoxVariant, monthsOf } = require('../kits/config');
+const seal = require('../kits/seal');
 const { withLock } = require('../kits/lock');
 const { loadTiers, offrable } = require('./tiers');
 const { componentSources } = require('../stock/bundles');
@@ -52,6 +53,38 @@ function ok(payload, label) {
 }
 
 /* ------------------------- calculs purs ------------------------- */
+
+// Saveur de la boîte offerte : choisie par l'abonné (note Seal mmz_cadeau_<palier> = id de variante),
+// sinon sa saveur préférée (la boîte la plus présente dans son colis), sinon le produit de la fiche.
+const CHOICE_PREFIX = 'mmz_cadeau_';
+const choiceNote = (handle) => CHOICE_PREFIX + handle;
+const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+/** Quantité par saveur (libellé actuel) à partir de lignes { variant_id, quantite } ou de lignes de commande. */
+function flavourCounts(lines) {
+  const map = new Map();
+  for (const l of lines || []) {
+    const v = String(l.variant_id || shopify.legacyId(l.variant?.id) || '');
+    if (!isBoxVariant(v)) continue;
+    const label = config.boxes[v].label;
+    map.set(label, (map.get(label) || 0) + Number(l.quantite ?? l.currentQuantity ?? l.quantity ?? 0));
+  }
+  return map;
+}
+
+/** Variante offerte pour ce palier. options = [{ id, saveur }]. */
+function pickVariant(tier, { chosenId = null, counts = new Map() } = {}) {
+  if (!tier.auChoix) return tier.produit;
+  const chosen = tier.options.find((o) => o.id === String(chosenId || ''));
+  if (chosen) return chosen;
+  let best = null;
+  let bestQty = 0;
+  for (const [label, qty] of counts) {
+    const o = tier.options.find((x) => norm(x.saveur) === norm(label));
+    if (o && qty > bestQty) { best = o; bestQty = qty; }
+  }
+  return best || tier.produit;
+}
 
 /** Une livraison d'abonnement = commande non annulée avec une ligne Recharge vendue par abonnement. */
 function isSubscriptionDelivery(order) {
@@ -89,6 +122,7 @@ function soFar(history, { withTests = false } = {}) {
     mois: subs.reduce((s, o) => s + monthsOfOrder(o), 0),
     colis: subs.length,
     moisParColis: subs.length ? monthsOfOrder(subs[subs.length - 1]) : 1,
+    depuis: subs.length ? subs[0].createdAt : null,   // 1re commande d'abonnement
   };
 }
 
@@ -111,7 +145,7 @@ function decide({ tiers, before, after, granted, late = rattrapage() }) {
 }
 
 /** Vue « fidélité » du portail : où en est le client, ce qu'il a reçu, ce qui arrive. */
-function status({ tiers, n, colis = 0, moisParColis = 1, granted }) {
+function status({ tiers, n, colis = 0, moisParColis = 1, depuis = null, granted }) {
   const visibles = (tiers || []).filter((t) => t.titre && Number.isInteger(t.mois));
   const paliers = visibles.map((t) => {
     let statut;
@@ -122,21 +156,23 @@ function status({ tiers, n, colis = 0, moisParColis = 1, granted }) {
     else statut = 'passe';
     const restants = Math.max(0, t.mois - n);
     return {
+      handle: t.handle,
       mois: t.mois, titre: t.titre, message: t.message || '', statut,
+      choix: t.auChoix ? t.options.map((o) => ({ id: o.id, saveur: o.saveur })) : [],
       mois_restants: restants,
       // le prochain colis (même formule) suffit-il à franchir le cap ?
       prochain_colis: statut === 'a_venir' && restants <= moisParColis,
     };
   }).filter((p) => p.statut !== 'passe');
   const prochain = paliers.find((p) => p.statut === 'a_venir' || p.statut === 'bientot') || null;
-  return { mois: n, colis, mois_par_colis: moisParColis, paliers, prochain };
+  return { mois: n, colis, mois_par_colis: moisParColis, depuis, paliers, prochain };
 }
 
 /* ------------------------- accès Shopify ------------------------- */
 
 const ORDER_QUERY = `query CadeauCommande($id: ID!) {
   order(id: $id) {
-    id name createdAt cancelledAt tags displayFulfillmentStatus
+    id name email createdAt cancelledAt tags displayFulfillmentStatus
     customAttributes { key value }
     customer { id }
     lineItems(first: 100) { nodes { id quantity currentQuantity variant { id } sellingPlan { sellingPlanId } } }
@@ -182,6 +218,23 @@ async function enRupture(p, qty) {
   const tracked = (d.productVariants?.nodes || []).filter((v) => v.sku === src && v.inventoryItem?.tracked && shopify.legacyId(v.id) !== p.id);
   if (!tracked.length) return false;
   return Math.max(...tracked.map((v) => Number(v.inventoryQuantity || 0))) < qty;
+}
+
+/** Choix de saveur enregistrés par le client (notes de ses abonnements Seal). Erreur → aucun choix. */
+async function sealChoices(email) {
+  const out = {};
+  if (!email) return out;
+  try {
+    for (const s of await seal.findSubscriptionsByEmail(email)) {
+      const full = await seal.getSubscription(s.id);
+      for (const a of full.note_attributes || []) {
+        if (String(a.name).startsWith(CHOICE_PREFIX)) out[String(a.name).slice(CHOICE_PREFIX.length)] = String(a.value || '');
+      }
+    }
+  } catch (e) {
+    console.error('[paliers] choix de saveur illisibles, saveur préférée utilisée :', e.message);
+  }
+  return out;
 }
 
 /** La commande est-elle encore retenue par notre attente (MyLink ne peut pas la prendre) ? */
@@ -276,8 +329,13 @@ async function applyToOrder(orderId, { force } = {}) {
       const lines = order.lineItems?.nodes || [];
       const result = { order: order.name, mois_avant: before, mois_apres: after, offerts: [], reportes: [], mode: m };
 
-      for (const tier of decide({ tiers, before, after, granted })) {
-        const already = lines.some((l) => vid(l) === tier.produit.id && qtyOf(l) > 0);
+      const todo = decide({ tiers, before, after, granted });
+      const choices = todo.some((t) => t.auChoix) ? await sealChoices(order.email) : {};
+      const counts = flavourCounts(lines);
+      for (const t0 of todo) {
+        const tier = { ...t0, produit: pickVariant(t0, { chosenId: choices[t0.handle], counts }) };
+        const giftIds = t0.auChoix ? t0.options.map((o) => o.id) : [tier.produit.id];
+        const already = lines.some((l) => giftIds.includes(vid(l)) && qtyOf(l) > 0);
         if (already) {
           if (m === 'live' || m === 'test') await addTag(order.id, tagOf(tier.handle));
           result.offerts.push({ palier: tier.handle, deja_dans_la_commande: true });
@@ -317,11 +375,11 @@ async function statusFor(customerId) {
   const history = await customerHistory(customerId);
   // En mode test, les commandes de test comptent (pour qu'Hugo voie sa progression pendant ses essais)
   const f = soFar(history, { withTests: mode() === 'test' });
-  return status({ tiers, n: f.mois, colis: f.colis, moisParColis: f.moisParColis, granted: grantedHandles(history) });
+  return status({ tiers, n: f.mois, colis: f.colis, moisParColis: f.moisParColis, depuis: f.depuis, granted: grantedHandles(history) });
 }
 
 module.exports = {
-  mode, applyToOrder, statusFor,
+  mode, applyToOrder, statusFor, loadTiers, choiceNote, pickVariant, flavourCounts,
   // calculs purs (tests)
   isSubscriptionDelivery, monthsOfOrder, monthsBefore, soFar, grantedHandles, decide, status, stillHeld, tagOf,
 };

@@ -59,7 +59,7 @@ test('actions : décaler de 15 jours, refuser 10 jours, refuser un abonnement qu
   seal.findSubscriptionsByEmail = async () => [{ id: 77 }];
   actions.reschedule = async (id, att, date) => { calls.push(['reschedule', att, date]); cur.billing_attempts[1].date = date; };
   actions.skip = async (id, att) => { calls.push(['skip', att]); cur.billing_attempts[1].status = 'skipped'; };
-  rewards.statusFor = async () => ({ livraisons: 2, paliers: [], prochain: null });
+  rewards.statusFor = async () => ({ livraisons: 2, depuis: '2026-10-01T10:00:00Z', paliers: [], prochain: null });
   const app = express(); app.use(express.json());
   app.use('/kits/portal', require('../core/portal/portalApi'));
 
@@ -82,4 +82,9 @@ test('actions : décaler de 15 jours, refuser 10 jours, refuser un abonnement qu
   assert.equal(r.status, 200);
   assert.equal(r.json.abonnements.length, 1);
   assert.equal(r.json.fidelite.livraisons, 2);
+
+  // Seal sans date de début : les jours viennent de la 1re commande d'abonnement
+  cur = SUB(); delete cur.created_at;
+  r = await call(app, 'GET', '/kits/portal/overview');
+  assert.ok(r.json.abonnements[0].progression.jours >= 43);
 });

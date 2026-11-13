@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { config, isBoxVariant } = require('../kits/config');
 
 function loadConfig() {
   return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
@@ -34,18 +35,25 @@ function progression(sub, now = Date.now(), cfg = loadConfig(), paquetsParJour =
   const jours = start ? Math.max(0, Math.floor((now - start) / DAY)) : null;
   const out = { depuis: sub.created_at || null, jours, livraisons: deliveriesCount(sub), economies_eur: null };
   const ppj = Number(paquetsParJour);
-  if (jours !== null && ppj > 0) out.economies_eur = Math.round(jours * ppj * Number(cfg.progression?.prix_paquet_eur || 0));
+  out.prix_paquet_eur = Number(cfg.progression?.prix_paquet_eur || 0);   // la page recalcule sans recharger
+  if (jours !== null && ppj > 0) out.economies_eur = Math.round(jours * ppj * out.prix_paquet_eur);
   return out;
 }
 
 /** Contenu de la prochaine livraison : lignes de l'abonnement (boîtes à 0 € comprises). */
 function contenu(sub) {
-  const items = (sub.items || []).map((it) => ({
-    titre: it.title || it.product_title || '',
-    variante: it.variant_title || '',
-    quantite: Number(it.quantity || 0),
-    prix: Number(it.price || 0),
-  }));
+  const items = (sub.items || []).map((it) => {
+    const vid = String(it.variant_id || '');
+    // Boîtes : nom de saveur actuel (Seal garde l'ancien titre, ex. « Menthe Poivrée »)
+    const box = isBoxVariant(vid) ? config.boxes[vid] : null;
+    return {
+      titre: box ? 'Boîte ZÉRO' : (it.title || it.product_title || ''),
+      variante: box ? box.label : (it.variant_title || ''),
+      quantite: Number(it.quantity || 0),
+      prix: Number(it.price || 0),
+      variant_id: vid,
+    };
+  });
   const total = items.reduce((s, it) => s + it.prix * it.quantite, 0);
   return { lignes: items.filter((i) => i.quantite > 0), total: Math.round(total * 100) / 100 };
 }

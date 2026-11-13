@@ -27,7 +27,10 @@ const QUERY = `query Paliers($type: String!) {
           ... on ProductVariant {
             id sku price title inventoryPolicy inventoryQuantity
             inventoryItem { tracked }
-            product { title status }
+            product {
+              title status
+              variants(first: 20) { nodes { id sku price title inventoryPolicy inventoryQuantity inventoryItem { tracked } } }
+            }
           }
         }
       }
@@ -53,16 +56,22 @@ function normalize(node, known = mylinkSkus()) {
   const f = Object.fromEntries((node.fields || []).map((x) => [x.key, x]));
   const val = (k) => (f[k] && f[k].value !== null && f[k].value !== undefined ? String(f[k].value) : '');
   const ref = f.produit_offert?.reference || null;
-  const variant = ref && ref.id ? {
-    id: shopify.legacyId(ref.id),
-    sku: ref.sku || '',
-    titre: [ref.product?.title, ref.title && ref.title !== 'Default Title' ? ref.title : ''].filter(Boolean).join(' – '),
-    prix: Number(ref.price || 0),
-    suivi: !!ref.inventoryItem?.tracked,
-    refuseRupture: ref.inventoryPolicy === 'DENY',
-    stock: ref.inventoryQuantity === null || ref.inventoryQuantity === undefined ? null : Number(ref.inventoryQuantity),
+  const toVariant = (v) => ({
+    id: shopify.legacyId(v.id),
+    sku: v.sku || '',
+    titre: [ref.product?.title, v.title && v.title !== 'Default Title' ? v.title : ''].filter(Boolean).join(' – '),
+    saveur: v.title && v.title !== 'Default Title' ? v.title : '',
+    prix: Number(v.price || 0),
+    suivi: !!v.inventoryItem?.tracked,
+    refuseRupture: v.inventoryPolicy === 'DENY',
+    stock: v.inventoryQuantity === null || v.inventoryQuantity === undefined ? null : Number(v.inventoryQuantity),
     statut: ref.product?.status || '',
-  } : null;
+  });
+  const variant = ref && ref.id ? toVariant(ref) : null;
+  // Produit offert à plusieurs variantes (ex. Boîte ZÉRO offerte : 4 saveurs) : l'abonné choisit.
+  // On ne garde que les variantes valables (SKU connu de MyLink, ni Boîte du composeur ni Recharge).
+  const options = ref && ref.id ? (ref.product?.variants?.nodes || []).map(toVariant)
+    .filter((v) => v.sku && known.has(v.sku) && !isBoxVariant(v.id) && !isParentVariant(v.id)) : [];
 
   const tier = {
     handle: node.handle,
@@ -73,6 +82,8 @@ function normalize(node, known = mylinkSkus()) {
     message: val('message'),
     quantite: parseInt(val('quantite'), 10) || 1,
     produit: variant,
+    options: options.length > 1 ? options : [],
+    auChoix: options.length > 1,
     problemes: [],
   };
 
