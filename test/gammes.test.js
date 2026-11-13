@@ -151,58 +151,186 @@ test('Mes saveurs : un abonné RITUEL voit sa formule et les 4 rituels, et peut 
 /* ---------------- Calendrier et pause ---------------- */
 const dayFromNow = (n) => ov.addDays(ov.parisToday(), n);
 
-test('calendrier et pause : fenêtre J+2 → date prévue +29 j, pause 1 ou 2 mois avec reprise automatique', async () => {
-  const D = dayFromNow(20);
-  const reschedules = [];
-  actions.reschedule = async (id, att, date, time, tz, reset) => {
-    reschedules.push({ date, time, reset });
-    SUB.billing_attempts[0].date = `${date}T${time}:00+00:00`;
-  };
+/*
+ * Calendrier Seal simulé, avec ses vraies règles (constatées le 13/11 sur un abonnement test) :
+ * deux livraisons ne peuvent pas tomber le même jour (même avec reset_schedule) ; reset_schedule
+ * supprime les livraisons non traitées qui suivent et les recrée à partir de la nouvelle date.
+ */
+let attemptId = 1000;
+const att = (day) => ({ id: attemptId++, date: `${day}T11:00:00+00:00`, status: '', order_id: '', completed_at: '', skipped_on: null });
+const months = () => parseInt(SUB.delivery_interval, 10);
+const opsLog = [];
+let failOn = null;   // { type, n } : la n-ième action de ce type échoue
+function failIf(type) {
+  if (failOn && failOn.type === type && --failOn.n === 0) { failOn = null; throw new Error('Seal indisponible'); }
+}
+actions.skip = async (id, aid) => { failIf('skip'); opsLog.push(['skip', String(aid)]); SUB.billing_attempts.find((a) => String(a.id) === String(aid)).skipped_on = ov.parisToday(); };
+actions.unskip = async (id, aid) => { failIf('unskip'); opsLog.push(['unskip', String(aid)]); SUB.billing_attempts.find((a) => String(a.id) === String(aid)).skipped_on = null; };
+actions.reschedule = async (id, aid, date, time, tz, reset) => {
+  failIf('move');
+  const a = SUB.billing_attempts.find((x) => String(x.id) === String(aid));
+  if (SUB.billing_attempts.some((x) => x !== a && x.date.slice(0, 10) === date)) {
+    throw new Error("Couldn't reschedule billing attempt. There is already another attempt scheduled close to the desired date.");
+  }
+  opsLog.push(['move', String(aid), date, reset]);
+  a.date = `${date}T${time}:00+00:00`;
+  if (reset) {
+    SUB.billing_attempts = SUB.billing_attempts.filter((x) => x === a || x.date < a.date);
+    for (let k = 1; k <= 3; k++) SUB.billing_attempts.push(att(ov.addMonths(date, k * months())));
+  }
+};
+function schedule(variant, every, firstDay, n = 4, extra = {}) {
+  reset([{ id: 1, variant_id: variant, quantity: 1, price: '49.90' }], {
+    delivery_interval: `${every} month`, billing_interval: `${every} month`,
+    billing_attempts: Array.from({ length: n }, (_, k) => att(ov.addMonths(firstDay, k * every))), ...extra,
+  });
+  opsLog.length = 0;
+}
+const portalApp = () => {
   rewards.statusFor = async () => null;
   const app = express(); app.use(express.json());
   app.use('/kits/portal', require('../core/portal/portalApi'));
-  reset([{ id: 1, variant_id: BN1, quantity: 1, price: '49.90' }], { billing_attempts: [{ id: 77, date: `${D}T11:00:00+00:00`, status: '', order_id: '', completed_at: '', skipped_on: null }] });
+  return app;
+};
+const days = () => SUB.billing_attempts.map((a) => a.date.slice(0, 10) + (a.skipped_on ? ' (sautée)' : ''));
 
-  // Vue : gamme, formule, fenêtre de dates
-  let r = await call(app, 'GET', '/kits/portal/overview');
-  let v = r.json.abonnements[0];
+test('calendrier : fenêtre J+2 → date prévue +29 j, jamais le jour de la livraison suivante', async () => {
+  const app = portalApp();
+  const D = dayFromNow(20);
+  schedule(BN1, 1, D);
+  let v = (await call(app, 'GET', '/kits/portal/overview')).json.abonnements[0];
   assert.equal(v.gamme, 'rituel');
   assert.equal(v.formule_mois, 1);
-  assert.deepEqual(v.dates_possibles, { min: dayFromNow(2), max: ov.addDays(D, 29) });
+  const eve = ov.addDays(ov.addMonths(D, 1), -1);
+  assert.deepEqual(v.dates_possibles, { min: dayFromNow(2), max: [ov.addDays(D, 29), eve].sort()[0] });
   assert.deepEqual(v.pause_mois, [1, 2]);
 
-  // Date hors fenêtre : refusée ; dans la fenêtre : acceptée, heure gardée, calendrier recalculé
-  r = await call(app, 'POST', '/kits/portal/9/date', { date: ov.addDays(D, 30) });
+  let r = await call(app, 'POST', '/kits/portal/9/date', { date: ov.addMonths(D, 1) });   // jour de la suivante
   assert.equal(r.status, 400);
   r = await call(app, 'POST', '/kits/portal/9/date', { date: dayFromNow(1) });
   assert.equal(r.status, 400);
   r = await call(app, 'POST', '/kits/portal/9/date', { date: ov.addDays(D, 10) });
   assert.equal(r.status, 200);
-  assert.deepEqual(reschedules.pop(), { date: ov.addDays(D, 10), time: '11:00', reset: true });
+  assert.deepEqual(opsLog.pop(), ['move', String(SUB.billing_attempts[0].id), ov.addDays(D, 10), true]);
+  assert.equal(r.json.abonnement.prochaine_livraison.date.slice(0, 10), ov.addDays(D, 10));
+  assert.equal(SUB.billing_attempts[1].date.slice(0, 10), ov.addMonths(ov.addDays(D, 10), 1));   // les suivantes repartent de là
+});
 
-  // Pause 3 mois : non proposée ; pause 2 mois : livraison repoussée, note posée, reprise affichée
-  r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 3 });
+test('pause d\'un abonnement mensuel : on saute jusqu\'à la livraison de reprise (rien à déplacer), puis on la défait', async () => {
+  const app = portalApp();
+  const D = dayFromNow(20);
+  schedule(Z1, 1, D);
+  const [a1, a2] = SUB.billing_attempts.map((a) => String(a.id));
+
+  let r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 3 });
   assert.equal(r.status, 400);
-  const avant = ov.addDays(D, 10);
+  r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 1 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(opsLog, [['skip', a1]]);
+  assert.equal(SUB.status, 'ACTIVE');   // pas une pause Seal : l'abonnement reprend tout seul
+  let v = r.json.abonnement;
+  assert.deepEqual(v.pause, { depuis: D, jusqu_au: ov.addMonths(D, 1) });
+  assert.deepEqual(v.prochaine_livraison, { id: a2, date: SUB.billing_attempts[1].date, skipped: false });
+  assert.equal(v.dates_possibles, null);
+
+  // Pendant la pause : pas de décalage, de saut, ni de livraison immédiate
+  for (const [path, body] of [['decaler', { jours: 7 }], ['date', { date: ov.addDays(D, 3) }], ['sauter', {}], ['recevoir-maintenant', {}], ['pause', { mois: 1 }]]) {
+    r = await call(app, 'POST', `/kits/portal/9/${path}`, body);
+    assert.equal(r.status, 400, path);
+  }
+
+  // Reprendre plus tôt : la livraison sautée revient
+  opsLog.length = 0;
+  r = await call(app, 'POST', '/kits/portal/9/fin-pause', {});
+  assert.equal(r.status, 200);
+  assert.deepEqual(opsLog, [['unskip', a1]]);
+  assert.equal(r.json.abonnement.pause, null);
+  assert.equal(r.json.abonnement.prochaine_livraison.date.slice(0, 10), D);
+  r = await call(app, 'POST', '/kits/portal/9/fin-pause', {});
+  assert.equal(r.status, 400);
+
+  // 2 mois : deux livraisons sautées, reprise sur la 3e ; reprise anticipée = les deux reviennent
+  opsLog.length = 0;
   r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 2 });
   assert.equal(r.status, 200);
-  assert.deepEqual(reschedules.pop(), { date: ov.addMonths(avant, 2), time: '11:00', reset: true });
-  assert.equal(SUB.status, 'ACTIVE');   // pas une pause Seal : l'abonnement reprend tout seul
-  assert.deepEqual(r.json.abonnement.pause, { depuis: avant, jusqu_au: ov.addMonths(avant, 2) });
+  assert.deepEqual(opsLog, [['skip', a1], ['skip', a2]]);
+  assert.equal(r.json.abonnement.pause.jusqu_au, ov.addMonths(D, 2));
+  r = await call(app, 'POST', '/kits/portal/9/fin-pause', {});
+  assert.deepEqual(days().slice(0, 2), [D, ov.addMonths(D, 1)]);
+});
 
-  // Reprendre plus tôt : retour à la date d'origine, note effacée
+test('pause d\'une formule 2 mois : la livraison est reportée à la reprise, puis remise à sa date', async () => {
+  const app = portalApp();
+  const D = dayFromNow(20);
+  schedule(BN2, 2, D, 3);
+  const a1 = String(SUB.billing_attempts[0].id);
+  let r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 1 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(opsLog, [['move', a1, ov.addMonths(D, 1), true]]);
+  assert.deepEqual(r.json.abonnement.pause, { depuis: D, jusqu_au: ov.addMonths(D, 1) });
+  assert.equal(r.json.abonnement.prochaine_livraison.id, a1);
+
   r = await call(app, 'POST', '/kits/portal/9/fin-pause', {});
   assert.equal(r.status, 200);
-  assert.equal(reschedules.pop().date, avant);
   assert.equal(r.json.abonnement.pause, null);
-  r = await call(app, 'POST', '/kits/portal/9/fin-pause', {});
-  assert.equal(r.status, 400);
+  assert.deepEqual(days().slice(0, 2), [D, ov.addMonths(D, 2)]);
 
-  // Raccourci +7 pendant une pause : la pause est effacée (la date affichée reste vraie)
-  await call(app, 'POST', '/kits/portal/9/pause', { mois: 1 });
-  r = await call(app, 'POST', '/kits/portal/9/decaler', { jours: 7 });
+  // Pause 2 mois sur une formule 2 mois : la livraison suivante tombe pile → on saute
+  opsLog.length = 0;
+  r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 2 });
+  assert.deepEqual(opsLog.map((o) => o[0]), ['skip']);
+  assert.equal(r.json.abonnement.pause.jusqu_au, ov.addMonths(D, 2));
+});
+
+test('pause : si Seal échoue en cours de route, tout est remis comme avant (ni note, ni livraison sautée)', async () => {
+  const app = portalApp();
+  const D = dayFromNow(20);
+  schedule(Z1, 1, D);
+  const before = days();
+  failOn = { type: 'skip', n: 2 };   // la 2e livraison ne peut pas être sautée
+  let r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 2 });
+  assert.equal(r.status, 502);
+  assert.deepEqual(days(), before);
+  assert.equal(seal.getNote(SUB, ov.PAUSE_NOTE), '');
+
+  // La note ne peut pas être écrite : la livraison sautée est remise
+  const write = seal.upsertNotes;
+  seal.upsertNotes = async () => { throw new Error('Seal indisponible'); };
+  r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 1 });
+  seal.upsertNotes = write;
+  assert.equal(r.status, 502);
+  assert.deepEqual(days(), before);
+});
+
+test('reprendre plus tôt quand la livraison sautée est déjà (presque) passée : reprise au plus tôt, J+2', async () => {
+  const app = portalApp();
+  const D = dayFromNow(1);   // trop proche pour être reprise
+  schedule(Z1, 1, D);
+  let r = await call(app, 'POST', '/kits/portal/9/pause', { mois: 1 });
   assert.equal(r.status, 200);
-  assert.equal(r.json.abonnement.pause, null);
+  opsLog.length = 0;
+  r = await call(app, 'POST', '/kits/portal/9/fin-pause', {});
+  assert.equal(r.status, 200);
+  assert.deepEqual(opsLog.map((o) => o.slice(0, 3)), [['move', String(SUB.billing_attempts[1].id), dayFromNow(2)]]);
+  const v = r.json.abonnement;
+  assert.equal(v.pause, null);
+  // La livraison de demain reste sautée (affichée comme telle), la vraie prochaine est à J+2
+  assert.deepEqual([v.prochaine_livraison.skipped, v.prochaine_livraison.suivante.slice(0, 10)], [true, dayFromNow(2)]);
+});
+
+test('une livraison sautée dont la date est passée n\'est plus « la prochaine »', () => {
+  schedule(Z1, 1, dayFromNow(-3));
+  SUB.billing_attempts[0].skipped_on = dayFromNow(-5);
+  assert.equal(ov.nextAttempt(SUB).date.slice(0, 10), ov.addMonths(dayFromNow(-3), 1));
+});
+
+test('note de pause : ancienne forme « origine|reprise » toujours lue', () => {
+  const D = dayFromNow(20);
+  schedule(Z1, 1, D);
+  SUB.note_attributes = [{ name: ov.PAUSE_NOTE, value: `${dayFromNow(-10)}|${D}` }];
+  assert.deepEqual(ov.pauseOf(SUB).jusqu_au, D);
+  SUB.note_attributes = [{ name: ov.PAUSE_NOTE, value: '' }];
+  assert.equal(ov.pauseOf(SUB), null);
 });
 
 test('anciennes pauses Seal : jamais relancées automatiquement, « Reprendre » à la demande seulement', async () => {
