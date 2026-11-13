@@ -146,6 +146,12 @@ app.use(express.json({ limit: '50kb' }));
 // ✅ Brique B : « Mes saveurs » (client connecté, jeton signé par le thème)
 const KITS_ORIGINS = (process.env.KITS_ALLOWED_ORIGINS || 'https://mymoodz.co,https://www.mymoodz.co,https://testshopilol.myshopify.com')
   .split(',').map((s) => s.trim()).filter(Boolean);
+// ✅ Portail « Mon abonnement » (prochaine livraison, décaler, sauter, pause, progression, paliers)
+app.use(
+  '/kits/portal',
+  cors({ origin: KITS_ORIGINS, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }),
+  require('./core/portal/portalApi')
+);
 app.use(
   '/kits',
   cors({ origin: KITS_ORIGINS, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }),
