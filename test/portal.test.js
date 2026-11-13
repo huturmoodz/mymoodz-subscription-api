@@ -13,20 +13,26 @@ const seal = require('../core/kits/seal');
 const actions = require('../core/portal/sealPortal');
 const rewards = require('../core/rewards/engine');
 
+// Dates relatives au jour du test (la fenêtre de report dépend de la date du jour)
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const D1 = day(17);
+const D2 = day(47);
+const D1_15 = new Date(Date.parse(`${D1}T12:00:00Z`) + 15 * 86400000).toISOString().slice(0, 10);
+
 const SUB = () => ({
   id: 77, email: 'a@b.fr', status: 'ACTIVE', created_at: '2026-10-01T10:00:00Z',
   items: [{ title: 'Recharge ZÉRO Saveurs', variant_title: '1 Mois', quantity: 1, price: '49.90' },
     { title: 'Boîte ZÉRO', variant_title: 'Citron', quantity: 4, price: '0.00' }],
   billing_attempts: [
     { id: 1, date: '2026-10-31', status: 'completed', order_id: 9 },
-    { id: 2, date: '2026-11-30', status: 'scheduled' },
-    { id: 3, date: '2026-12-30', status: 'scheduled' },
+    { id: 2, date: D1, status: 'scheduled' },
+    { id: 3, date: D2, status: 'scheduled' },
   ],
 });
 
 test('vue : prochaine livraison, contenu, livraisons reçues, progression', () => {
   const s = SUB();
-  assert.deepEqual(ov.nextAttempt(s), { id: '2', date: '2026-11-30', skipped: false });
+  assert.deepEqual(ov.nextAttempt(s), { id: '2', date: D1, skipped: false });
   assert.equal(ov.contenu(s).total, 49.9);
   assert.equal(ov.deliveriesCount(s), 2);
   const pr = ov.progression(s, Date.parse('2026-11-13T10:00:00Z'), ov.loadConfig(), 1);
@@ -65,8 +71,8 @@ test('actions : décaler de 15 jours, refuser 10 jours, refuser un abonnement qu
 
   let r = await call(app, 'POST', '/kits/portal/77/decaler', { jours: 15 });
   assert.equal(r.status, 200);
-  assert.deepEqual(calls[0], ['reschedule', '2', '2026-12-15']);
-  assert.equal(r.json.abonnement.prochaine_livraison.date, '2026-12-15');
+  assert.deepEqual(calls[0], ['reschedule', '2', D1_15]);
+  assert.equal(r.json.abonnement.prochaine_livraison.date, D1_15);
 
   r = await call(app, 'POST', '/kits/portal/77/decaler', { jours: 10 });
   assert.equal(r.status, 400);

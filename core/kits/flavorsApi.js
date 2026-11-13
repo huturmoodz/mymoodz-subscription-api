@@ -2,6 +2,8 @@
 // BRIQUE B — « Mes saveurs » : le client connecté consulte et modifie la répartition des boîtes
 // de son abonnement pour la prochaine livraison (une seule saveur, ou un mix).
 // Le nombre total de boîtes est imposé par sa formule (1 mois = 4, 2 mois = 8, 3 mois = 12).
+// Abonnements RITUEL : même page, sans mélange — l'abonné change sa formule ou son rituel.
+// L'ancienne gamme n'apparaît pas ici (rien à composer ni à changer en libre-service).
 
 const express = require('express');
 const { config, monthsOf, isParentVariant } = require('./config');
@@ -11,6 +13,8 @@ const { analyse, storedPerUnit, applyToSubscription } = require('./subscriptionK
 const { requireCustomer } = require('./customerAuth');
 const { withLock } = require('./lock');
 const { changeFormula, formulaOptions, FormulaError } = require('./formula');
+const { swapRituel, rituelOptions, rituelLines } = require('./rituel');
+const { rituelOf, isRituelVariant } = require('./config');
 
 const router = express.Router();
 
@@ -38,13 +42,33 @@ function owns(sub, who) {
   return true;
 }
 
+/** Vue d'un abonnement RITUEL : formule et rituel, pas de saveurs à répartir. */
+function viewRituel(sub) {
+  const line = rituelLines(sub)[0];
+  const r = rituelOf(line.variant_id);
+  const opts = rituelOptions(line.variant_id);
+  return {
+    id: sub.id,
+    kind: 'rituel',
+    status: sub.status,
+    next_billing_date: sub.next_billing_date || sub.next_order_date || null,
+    rituel: { code: r.code, label: r.label, variantId: String(line.variant_id) },
+    formula: { variantId: String(line.variant_id), months: r.months, quantity: Number(line.quantity || 1) },
+    target: r.months * config.boxesPerMonth,
+    formulas: opts.formulas,
+    rituels: opts.rituels,
+  };
+}
+
 function view(sub) {
+  if (!analyse(sub).parents.length && rituelLines(sub).length) return viewRituel(sub);
   const { parents } = analyse(sub);
   const parent = parents[0];
   const perUnit = storedPerUnit(sub, parent) || new Map();
   const qty = parents.reduce((s, p) => s + Number(p.quantity || 0), 0);
   return {
     id: sub.id,
+    kind: 'zero',
     status: sub.status,
     next_billing_date: sub.next_billing_date || sub.next_order_date || null,
     formula: { variantId: String(parent.variant_id), months: monthsOf(parent.variant_id), quantity: qty },
@@ -63,7 +87,7 @@ router.get('/subscriptions', async (req, res) => {
       // La liste ne contient pas toujours tout : on relit chaque abonnement en détail
       const full = await seal.getSubscription(s.id);
       if (!owns(full, req.customer)) continue;
-      if (!analyse(full).parents.length) continue;
+      if (!analyse(full).parents.length && !rituelLines(full).length) continue;
       mine.push(view(full));
     }
     return res.json({ ok: true, subscriptions: mine });
@@ -127,6 +151,29 @@ router.post('/subscriptions/:id/formula', async (req, res) => {
     if (e instanceof FormulaError) return res.status(400).json({ ok: false, error: e.message });
     console.error('[kits/flavors] formule', id, e.message, e.seal || '');
     return res.status(502).json({ ok: false, error: "Le changement de formule n'a pas pu être enregistré. Réessaie dans un instant, rien n'a été modifié." });
+  }
+});
+
+// RITUEL : changer de formule (1/2/3 mois du même rituel) ou de rituel (même formule).
+router.post('/subscriptions/:id/rituel', async (req, res) => {
+  const id = String(req.params.id || '');
+  const variantId = String(req.body?.variantId || '');
+  if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: 'Abonnement invalide.' });
+  if (!isRituelVariant(variantId)) return res.status(400).json({ ok: false, error: 'Choix invalide.' });
+  try {
+    const result = await withLock(`sub:${id}`, async () => {
+      const sub = await seal.getSubscription(id);
+      if (!owns(sub, req.customer)) return { status: 404, body: { ok: false, error: 'Abonnement introuvable.' } };
+      const r = await swapRituel(sub, variantId);
+      const fresh = await seal.getSubscription(id);
+      console.log('[kits/flavors] rituel', id, r);
+      return { status: 200, body: { ok: true, result: r, subscription: view(fresh) } };
+    });
+    return res.status(result.status).json(result.body);
+  } catch (e) {
+    if (e instanceof FormulaError) return res.status(400).json({ ok: false, error: e.message });
+    console.error('[kits/flavors] rituel', id, e.message, e.seal || '');
+    return res.status(502).json({ ok: false, error: "Le changement n'a pas pu être enregistré. Réessaie dans un instant, rien n'a été modifié." });
   }
 });
 

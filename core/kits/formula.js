@@ -7,7 +7,7 @@
 // Si une étape échoue, la fréquence est remise comme avant : on ne laisse jamais un abonnement
 // facturé au mauvais rythme.
 
-const { config, isParentVariant, monthsOf } = require('./config');
+const { config, isParentVariant, isBoxVariant, monthsOf } = require('./config');
 const { rescale, stringifyComposition, describe } = require('./composition');
 const seal = require('./seal');
 const { analyse, storedPerUnit, applyToSubscription } = require('./subscriptionKit');
@@ -76,6 +76,11 @@ async function changeFormula(sub, newVariantId) {
   const parent = parents[0];
   const from = String(parent.variant_id);
   if (from === target) return { unchanged: true };
+  // Le rythme est celui de tout l'abonnement dans Seal : s'il contient d'autres produits (RITUEL,
+  // ancienne gamme…), changer la formule changerait aussi leur rythme. On ne le fait pas en libre-service.
+  const otherProducts = (sub.items || []).filter((it) => it !== parent && Number(it.quantity || 0) > 0
+    && !isParentVariant(it.variant_id) && !isBoxVariant(it.variant_id));
+  if (otherProducts.length) throw new FormulaError('Cet abonnement contient aussi d’autres produits : contacte-nous pour changer sa formule.');
 
   const oldMonths = monthsOf(from);
   const newMonths = monthsOf(target);
