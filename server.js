@@ -21,6 +21,9 @@ const flavorsApi = require('./core/kits/flavorsApi');
 const { requireCustomer } = require('./core/kits/customerAuth');
 // ✅ Stock des packs recalculé à partir des composants (MyLink)
 const stockSync = require('./core/stock/sync');
+// ✅ Cadeaux de fidélité des abonnés (paliers réglés dans Shopify, REWARDS_MODE ≠ off)
+const rewards = require('./core/rewards/engine');
+const { loadTiers } = require('./core/rewards/tiers');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -118,6 +121,9 @@ app.post('/webhooks/shopify/orders', express.raw({ type: '*/*' }), async (req, r
     const payload = JSON.parse(req.body.toString('utf-8'));
     const topic = req.header('X-Shopify-Topic') || 'orders';
     if (!payload?.id) return;
+    // Cadeau de fidélité d'abord : la commande est encore retenue, MyLink ne l'a pas (ne bloque jamais).
+    const cadeau = await rewards.applyToOrder(payload.id);
+    if (!cadeau.skipped) console.log('[shopify orders] cadeau', payload.name || payload.id, JSON.stringify(cadeau));
     const result = await processOrder(payload.id, topic);
     console.log('[shopify orders]', topic, payload.name || payload.id, result);
   } catch (err) {
@@ -181,6 +187,25 @@ app.post('/admin/stock/sync', async (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ ok: false });
   try { return res.json({ ok: true, report: await stockSync.run() }); }
   catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ✅ Paliers de fidélité : contrôle des réglages Shopify, situation d'un client, rejouer une commande
+app.get('/admin/paliers', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ ok: false });
+  const tiers = await loadTiers({ force: true });
+  if (!tiers) return res.status(502).json({ ok: false, error: 'Paliers illisibles (droit read_metaobjects ?)' });
+  return res.json({ ok: true, mode: rewards.mode(), paliers: tiers });
+});
+app.get('/admin/paliers/clients/:id', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ ok: false });
+  try { return res.json({ ok: true, fidelite: await rewards.statusFor(String(req.params.id)) }); }
+  catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/admin/paliers/commandes/:id', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ ok: false });
+  // ?simulation=1 : calcule sans rien toucher, même si REWARDS_MODE=live
+  const force = req.query.simulation === '1' ? 'dry' : undefined;
+  return res.json({ ok: true, result: await rewards.applyToOrder(String(req.params.id), { force }) });
 });
 
 // -------- Routes de base --------

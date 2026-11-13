@@ -9,6 +9,7 @@ const { requireCustomer } = require('../kits/customerAuth');
 const { withLock } = require('../kits/lock');
 const actions = require('./sealPortal');
 const ov = require('./overview');
+const rewards = require('../rewards/engine');
 
 const router = express.Router();
 
@@ -40,7 +41,6 @@ function view(sub, paquetsParJour) {
     prochaine_livraison: ov.nextAttempt(sub),
     contenu: ov.contenu(sub),
     progression: ov.progression(sub, Date.now(), cfg, paquetsParJour),
-    fidelite: ov.paliers(sub, cfg),
     decalages_jours: cfg.decalages_jours || [7, 15],
   };
 }
@@ -54,7 +54,13 @@ router.get('/overview', async (req, res) => {
       const full = await seal.getSubscription(s.id);
       if (owns(full, req.customer)) out.push(view(full, ppj));
     }
-    return res.json({ ok: true, abonnements: out });
+    // Paliers de fidélité : par client (pas par abonnement). Illisibles → null, la page masque le bloc.
+    let fidelite = null;
+    if (out.length) {
+      try { fidelite = await rewards.statusFor(req.customer.customerId); }
+      catch (e) { console.error('[portal] fidélité', e.message); }
+    }
+    return res.json({ ok: true, abonnements: out, fidelite });
   } catch (e) {
     console.error('[portal] overview', e.message, e.seal || '');
     return res.status(502).json({ ok: false, error: 'Impossible de lire ton abonnement pour le moment.' });

@@ -1,6 +1,6 @@
 // core/portal/overview.js
 // Calculs purs (sans réseau) de la page « Mon abonnement » : prochaine livraison, contenu,
-// progression et paliers de fidélité, à partir d'un abonnement Seal relu.
+// et progression, à partir d'un abonnement Seal relu. Les paliers de fidélité sont dans core/rewards.
 
 const fs = require('fs');
 const path = require('path');
@@ -38,18 +38,6 @@ function progression(sub, now = Date.now(), cfg = loadConfig(), paquetsParJour =
   return out;
 }
 
-function paliers(sub, cfg = loadConfig()) {
-  const n = deliveriesCount(sub);
-  const list = (cfg.paliers || []).slice().sort((a, b) => a.livraisons - b.livraisons);
-  const prochain = list.find((p) => p.livraisons > n) || null;
-  return {
-    livraisons: n,
-    atteints: list.filter((p) => p.livraisons <= n).map((p) => ({ ...p })),
-    prochain: prochain ? { ...prochain, restantes: prochain.livraisons - n } : null,
-    tous: list,
-  };
-}
-
 /** Contenu de la prochaine livraison : lignes de l'abonnement (boîtes à 0 € comprises). */
 function contenu(sub) {
   const items = (sub.items || []).map((it) => ({
@@ -69,4 +57,4 @@ function shiftDate(iso, days) {
   return new Date(d.getTime() + Number(days) * DAY).toISOString().slice(0, 10);
 }
 
-module.exports = { loadConfig, nextAttempt, deliveriesCount, progression, paliers, contenu, shiftDate };
+module.exports = { loadConfig, nextAttempt, deliveriesCount, progression, contenu, shiftDate };
