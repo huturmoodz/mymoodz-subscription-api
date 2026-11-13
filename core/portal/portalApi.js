@@ -50,8 +50,10 @@ router.get('/overview', async (req, res) => {
     const ppj = Number(req.query.paquets_par_jour) || null;
     const list = await seal.findSubscriptionsByEmail(req.customer.email);
     const out = [];
+    const fulls = new Map();
     for (const s of list) {
       const full = await seal.getSubscription(s.id);
+      fulls.set(String(full.id), full);
       // Abonnements en cours seulement (actifs ou en pause) ; les résiliés ne s'affichent pas
       if (owns(full, req.customer) && /^(ACTIVE|PAUSED)$/i.test(String(full.status || ''))) out.push(view(full, ppj));
     }
@@ -62,6 +64,26 @@ router.get('/overview', async (req, res) => {
     if (out.length) {
       try { fidelite = await rewards.statusFor(req.customer.customerId); }
       catch (e) { console.error('[portal] fidélité', e.message); }
+    }
+    // Boîte offerte au choix : saveur choisie (note de l'abonnement Recharge) ou préférée (son mélange)
+    if (fidelite && out[0]) {
+      const mainFull = fulls.get(out[0].id);
+      const counts = rewards.flavourCounts(out[0].contenu.lignes);
+      for (const p of fidelite.paliers || []) {
+        if (!p.choix?.length) continue;
+        const chosen = seal.getNote(mainFull, rewards.choiceNote(p.handle));
+        p.choisi = p.choix.some((o) => o.id === chosen) ? chosen : null;
+        p.prefere = rewards.pickVariant({ auChoix: true, options: p.choix, produit: null }, { counts })?.id || null;
+      }
+    }
+    // Seal ne donne pas toujours la date de début : on prend alors la 1re commande d'abonnement (Shopify)
+    if (fidelite?.depuis) {
+      const cfg = ov.loadConfig();
+      for (const v of out) {
+        if (v.progression.jours !== null) continue;
+        const p = ov.progression({ created_at: fidelite.depuis }, Date.now(), cfg, ppj);
+        v.progression = { ...v.progression, depuis: p.depuis, jours: p.jours, economies_eur: p.economies_eur };
+      }
     }
     return res.json({ ok: true, abonnements: out, fidelite });
   } catch (e) {
@@ -126,6 +148,16 @@ act('recevoir-maintenant', async (sub) => {
   const next = ov.nextAttempt(sub);
   if (!active(sub) || !next?.id || next.skipped) return 'Aucune livraison à avancer.';
   await actions.processNow(sub.id, next.id);
+  return null;
+});
+
+act('cadeau', async (sub, body) => {
+  const tiers = await rewards.loadTiers();
+  const tier = (tiers || []).find((t) => t.handle === String(body.palier || '') && t.auChoix);
+  if (!tier) return 'Ce cadeau ne se choisit pas.';
+  const option = tier.options.find((o) => o.id === String(body.variante || ''));
+  if (!option) return 'Saveur inconnue.';
+  await seal.upsertNotes(sub.id, [{ name: rewards.choiceNote(tier.handle), value: option.id }]);
   return null;
 });
 
