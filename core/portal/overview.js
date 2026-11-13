@@ -13,10 +13,29 @@ function loadConfig() {
 const DAY = 86400000;
 const dateOf = (a) => a?.date || a?.billing_date || a?.scheduled_at || a?.billing_attempt_date || null;
 const isDone = (a) => !!(a?.order_id || a?.completed_at) || /^(completed|processed|success|paid)$/i.test(String(a?.status || ''));
-const isSkipped = (a) => /skip/i.test(String(a?.status || '')) || a?.skipped === true || a?.skipped === 1;
+// Échéance sautée : Seal ne documente pas comment il la renvoie (constaté le 13/11 : sautée dans
+// Seal, mais ni « status: skipped » ni « skipped: true »). On accepte toutes les formes plausibles :
+// un statut qui contient « skip », ou tout champ dont le nom contient « skip » avec une valeur vraie
+// (true, 1, "1", "true", "yes") ou une date (ex. skipped_at).
+const truthy = (v) => v === true || v === 1
+  || /^(1|true|yes|y)$/i.test(String(v ?? '').trim())
+  || (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v));
+const isSkipped = (a) => /skip/i.test(String(a?.status || ''))
+  || Object.keys(a || {}).some((k) => /skip/i.test(k) && truthy(a[k]));
+
+// Une seule fois par démarrage : la forme réelle des échéances Seal dans les logs (aucune donnée client).
+let shapeLogged = false;
+function logAttemptShape(sub) {
+  if (shapeLogged) return;
+  const open = (sub.billing_attempts || []).filter((a) => !isDone(a)).slice(0, 2);
+  if (!open.length) return;
+  shapeLogged = true;
+  console.log('[portal] forme des échéances Seal', JSON.stringify(open));
+}
 
 /** Prochaine échéance non traitée (sautée ou non), la plus proche. */
 function nextAttempt(sub) {
+  logAttemptShape(sub);
   const list = (sub.billing_attempts || [])
     .filter((a) => !isDone(a) && dateOf(a))
     .sort((a, b) => new Date(dateOf(a)) - new Date(dateOf(b)));
@@ -65,4 +84,4 @@ function shiftDate(iso, days) {
   return new Date(d.getTime() + Number(days) * DAY).toISOString().slice(0, 10);
 }
 
-module.exports = { loadConfig, nextAttempt, deliveriesCount, progression, contenu, shiftDate };
+module.exports = { loadConfig, isSkipped, nextAttempt, deliveriesCount, progression, contenu, shiftDate };
