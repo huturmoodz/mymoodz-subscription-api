@@ -1,0 +1,14 @@
+{
+  "_lisezmoi": [
+    "Réglages du portail abonné « Mon abonnement ». Modifiables sans toucher au code.",
+    "decalages_jours : décalages proposés pour la prochaine livraison.",
+    "paliers : récompenses de fidélité selon le nombre de livraisons reçues. « actif » = false : affiché mais pas encore offert automatiquement.",
+    "progression.prix_paquet_eur : prix moyen d'un paquet de cigarettes, pour l'estimation des économies (si le client a donné sa consommation)."
+  ],
+  "decalages_jours": [7, 15],
+  "paliers": [
+    { "livraisons": 3, "titre": "Une boîte offerte", "detail": "Une boîte d'une autre saveur ou d'un rituel, glissée dans ta livraison.", "actif": false },
+    { "livraisons": 6, "titre": "Un diffuseur neuf offert", "detail": "Ta batterie s'use : on te remplace ton diffuseur.", "actif": false }
+  ],
+  "progression": { "prix_paquet_eur": 12.5 }
+}
