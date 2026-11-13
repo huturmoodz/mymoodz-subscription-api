@@ -52,8 +52,11 @@ router.get('/overview', async (req, res) => {
     const out = [];
     for (const s of list) {
       const full = await seal.getSubscription(s.id);
-      if (owns(full, req.customer)) out.push(view(full, ppj));
+      // Abonnements en cours seulement (actifs ou en pause) ; les résiliés ne s'affichent pas
+      if (owns(full, req.customer) && /^(ACTIVE|PAUSED)$/i.test(String(full.status || ''))) out.push(view(full, ppj));
     }
+    // Recharge ZÉRO en premier (c'est elle qui porte les saveurs et les paliers)
+    out.sort((a, b) => Number(isRecharge(b)) - Number(isRecharge(a)));
     // Paliers de fidélité : par client (pas par abonnement). Illisibles → null, la page masque le bloc.
     let fidelite = null;
     if (out.length) {
@@ -89,6 +92,7 @@ function act(name, fn) {
   });
 }
 
+const isRecharge = (v) => (v.contenu?.lignes || []).some((l) => /recharge/i.test(l.titre));
 const active = (sub) => /^ACTIVE$/i.test(String(sub.status || ''));
 
 act('decaler', async (sub, body) => {
