@@ -33,12 +33,21 @@ function logAttemptShape(sub) {
   console.log('[portal] forme des échéances Seal', JSON.stringify(open));
 }
 
+/**
+ * Échéances à venir (non traitées), de la plus proche à la plus lointaine.
+ * Une échéance sautée dont la date est passée n'est plus « à venir ».
+ */
+function upcoming(sub, now = Date.now()) {
+  const today = parisToday(now);
+  return (sub.billing_attempts || [])
+    .filter((a) => !isDone(a) && dateOf(a) && !(isSkipped(a) && dayOf(dateOf(a)) < today))
+    .sort((a, b) => new Date(dateOf(a)) - new Date(dateOf(b)));
+}
+
 /** Prochaine échéance non traitée (sautée ou non), la plus proche. */
 function nextAttempt(sub) {
   logAttemptShape(sub);
-  const list = (sub.billing_attempts || [])
-    .filter((a) => !isDone(a) && dateOf(a))
-    .sort((a, b) => new Date(dateOf(a)) - new Date(dateOf(b)));
+  const list = upcoming(sub);
   const a = list[0];
   if (!a) return sub.next_billing_date ? { id: null, date: sub.next_billing_date, skipped: false } : null;
   const out = { id: String(a.id), date: dateOf(a), skipped: isSkipped(a) };
@@ -158,11 +167,17 @@ const dayOf = (iso) => String(iso || '').slice(0, 10);
 /**
  * Dates qu'un abonné peut choisir pour sa prochaine livraison :
  * au plus tôt dans « min » jours, au plus tard « max » jours après la date prévue. Au-delà : la pause.
+ * Seal refuse deux livraisons le même jour (constaté le 13/11, même avec « reset_schedule ») :
+ * on s'arrête donc la veille de la livraison suivante.
  */
-function dateWindow(next, cfg = loadConfig(), now = Date.now()) {
+function dateWindow(next, cfg = loadConfig(), now = Date.now(), following = null) {
   if (!next?.date) return null;
   const min = addDays(parisToday(now), cfg.report?.min_jours ?? 2);
-  const max = addDays(dayOf(next.date), cfg.report?.max_jours ?? 29);
+  let max = addDays(dayOf(next.date), cfg.report?.max_jours ?? 29);
+  if (following && dateOf(following)) {
+    const eve = addDays(dayOf(dateOf(following)), -1);
+    if (eve < max) max = eve;
+  }
   return min <= max ? { min, max } : null;
 }
 
@@ -173,16 +188,98 @@ function slotOn(iso, dateStr) {
   return { date: dateStr, time, timezone: '+00:00' };
 }
 
-/** Pause « maison » (report de la prochaine livraison) : note Seal « date d'origine|date de reprise ». */
+/* ---------- Pause « maison » ----------
+ * Pas une pause Seal : l'abonnement reste actif et reprend tout seul. Pour une pause de N mois :
+ *  - si une livraison est déjà prévue à la date de reprise (abonnement mensuel, par exemple), on saute
+ *    celles d'avant et on reprend sur elle. Seal refuse de mettre deux livraisons le même jour, donc
+ *    on ne déplace rien dans ce cas ;
+ *  - sinon (formule 2 ou 3 mois), on saute les éventuelles livraisons intermédiaires et on déplace la
+ *    dernière avant la reprise à la date de reprise (les suivantes repartent de là).
+ * Ce qui a été fait est noté sur l'abonnement (note « mmz_pause », JSON), pour que « Reprendre plus tôt »
+ * défasse exactement cela.
+ */
 const PAUSE_NOTE = 'mmz_pause';
-function pauseOf(sub, next) {
-  const raw = String((sub.note_attributes || []).find((a) => a.name === PAUSE_NOTE)?.value || '');
-  const [depuis, jusqu] = raw.split('|');
-  if (!jusqu || !next?.date || next.skipped || dayOf(next.date) !== jusqu) return null;
-  return { depuis, jusqu_au: jusqu };
+
+function readPauseNote(sub) {
+  const raw = String((sub.note_attributes || []).find((a) => a.name === PAUSE_NOTE)?.value || '').trim();
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw);
+    return p && p.reprise ? { depuis: p.depuis || null, reprise: p.reprise, sautees: (p.sautees || []).map(String), deplacee: p.deplacee || null } : null;
+  } catch (e) {
+    const [depuis, reprise] = raw.split('|');   // première forme de la note (« origine|reprise »)
+    return reprise ? { depuis, reprise, sautees: [], deplacee: null } : null;
+  }
+}
+
+/** Pause en cours : la première livraison non sautée tombe le jour de reprise noté. */
+function pauseOf(sub) {
+  const note = readPauseNote(sub);
+  if (!note) return null;
+  const resume = upcoming(sub).find((a) => !isSkipped(a));
+  if (!resume || dayOf(dateOf(resume)) !== note.reprise) return null;
+  return { depuis: note.depuis, jusqu_au: note.reprise, prochaine: { id: String(resume.id), date: dateOf(resume), skipped: false } };
+}
+
+/**
+ * Plan d'une pause de « mois » mois à partir de la prochaine livraison (non sautée).
+ * Renvoie { ops, note } : ops = actions Seal à faire dans l'ordre ; note = valeur de la note de pause.
+ */
+function planPause(sub, mois) {
+  const list = upcoming(sub);
+  const next = list[0];
+  if (!next || isSkipped(next)) return null;
+  const depuis = dayOf(dateOf(next));
+  const target = addMonths(depuis, mois);
+  // Une livraison déjà prévue autour de la date de reprise (± 1 jour) : on reprend sur elle
+  const anchor = list.find((a) => dayOf(dateOf(a)) >= addDays(target, -1));
+  const onTarget = anchor && dayOf(dateOf(anchor)) <= addDays(target, 1);
+  const before = list.filter((a) => dayOf(dateOf(a)) < (onTarget ? dayOf(dateOf(anchor)) : target));
+  const toSkip = onTarget ? before : before.slice(0, -1);
+  const toMove = onTarget ? null : before[before.length - 1];
+  const ops = toSkip.filter((a) => !isSkipped(a)).map((a) => ({ type: 'skip', id: String(a.id) }));
+  if (toMove) {
+    const from = slotOn(dateOf(toMove), dayOf(dateOf(toMove)));
+    ops.push({ type: 'move', id: String(toMove.id), to: slotOn(dateOf(toMove), target), from });
+  }
+  const reprise = onTarget ? dayOf(dateOf(anchor)) : target;
+  const note = {
+    depuis, reprise,
+    sautees: ops.filter((o) => o.type === 'skip').map((o) => o.id),
+    deplacee: toMove ? { id: String(toMove.id), date: dayOf(dateOf(toMove)) } : null,
+  };
+  return { ops, note };
+}
+
+/**
+ * Plan de « Reprendre plus tôt » : défaire la pause notée, sans jamais livrer avant « earliest »
+ * (J+2). Les livraisons sautées déjà passées (ou trop proches) restent sautées.
+ */
+function planResume(sub, pause, earliest) {
+  const note = readPauseNote(sub);
+  if (!note || !pause) return null;
+  const list = upcoming(sub);
+  const ops = [];
+  if (note.deplacee) {
+    const moved = list.find((a) => String(a.id) === String(note.deplacee.id));
+    if (moved) {
+      const back = note.deplacee.date >= earliest ? note.deplacee.date : earliest;
+      if (back < dayOf(dateOf(moved))) ops.push({ type: 'move', id: String(moved.id), to: slotOn(dateOf(moved), back), from: slotOn(dateOf(moved), dayOf(dateOf(moved))) });
+    }
+  }
+  for (const a of list) {
+    if (note.sautees.includes(String(a.id)) && isSkipped(a) && dayOf(dateOf(a)) >= earliest) ops.push({ type: 'unskip', id: String(a.id) });
+  }
+  // Rien à défaire (livraisons sautées déjà passées) : on avance la livraison de reprise au plus tôt
+  if (!ops.length && earliest < pause.jusqu_au) {
+    const resume = pause.prochaine;
+    ops.push({ type: 'move', id: resume.id, to: slotOn(resume.date, earliest), from: slotOn(resume.date, dayOf(resume.date)) });
+  }
+  return { ops };
 }
 
 module.exports = {
-  loadConfig, isSkipped, adresse, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot,
-  gammeOf, formuleMois, parisToday, addDays, addMonths, dateWindow, slotOn, dayOf, PAUSE_NOTE, pauseOf,
+  loadConfig, isSkipped, adresse, upcoming, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot,
+  gammeOf, formuleMois, parisToday, addDays, addMonths, dateWindow, slotOn, dayOf,
+  PAUSE_NOTE, readPauseNote, pauseOf, planPause, planResume,
 };

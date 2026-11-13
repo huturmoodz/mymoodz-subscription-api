@@ -33,9 +33,14 @@ function owns(sub, who) {
   return !(cid && String(cid).split('/').pop() !== who.customerId);
 }
 
+/** Livraison qui suit la prochaine (pour ne jamais proposer une date le même jour qu'elle). */
+const following = (sub) => ov.upcoming(sub)[1] || null;
+
 function view(sub, paquetsParJour) {
   const cfg = ov.loadConfig();
-  const next = ov.nextAttempt(sub);
+  const pause = ov.pauseOf(sub);
+  // En pause, la « prochaine livraison » affichée est celle de la reprise (les sautées n'en sont pas)
+  const next = pause ? pause.prochaine : ov.nextAttempt(sub);
   return {
     id: String(sub.id),
     statut: String(sub.status || '').toUpperCase(),
@@ -43,8 +48,8 @@ function view(sub, paquetsParJour) {
     gamme: ov.gammeOf(sub),
     formule_mois: ov.formuleMois(sub),
     prochaine_livraison: next,
-    pause: ov.pauseOf(sub, next),
-    dates_possibles: next && !next.skipped ? ov.dateWindow(next, cfg) : null,
+    pause: pause ? { depuis: pause.depuis, jusqu_au: pause.jusqu_au } : null,
+    dates_possibles: next && !next.skipped && !pause ? ov.dateWindow(next, cfg, Date.now(), following(sub)) : null,
     pause_mois: cfg.pause_mois || [1, 2],
     contenu: ov.contenu(sub),
     progression: ov.progression(sub, Date.now(), cfg, paquetsParJour),
@@ -135,9 +140,10 @@ async function clearPause(sub) {
   if (seal.getNote(sub, ov.PAUSE_NOTE)) await seal.upsertNotes(sub.id, [{ name: ov.PAUSE_NOTE, value: '' }]);
 }
 
-/** Prochaine livraison modifiable (active, pas sautée) ou message de refus. */
+/** Prochaine livraison modifiable (active, pas sautée, pas en pause) ou message de refus. */
 function movable(sub) {
   if (!active(sub)) return { refus: "L'abonnement n'est pas actif." };
+  if (ov.pauseOf(sub)) return { refus: 'Ton abonnement est en pause : reprends-le d\'abord.' };
   const next = ov.nextAttempt(sub);
   if (!next?.id) return { refus: 'Aucune livraison à modifier.' };
   if (next.skipped) return { refus: 'Cette livraison est sautée : reprends-la d\'abord.' };
@@ -145,11 +151,38 @@ function movable(sub) {
 }
 
 /**
+ * Exécute une suite d'actions Seal (sauter, reprendre, déplacer). Si l'une échoue, celles déjà
+ * faites sont défaites dans l'ordre inverse : l'abonnement n'est jamais laissé à moitié modifié.
+ */
+const doOp = (subId, op) => {
+  if (op.type === 'skip') return actions.skip(subId, op.id);
+  if (op.type === 'unskip') return actions.unskip(subId, op.id);
+  return actions.reschedule(subId, op.id, op.to.date, op.to.time, op.to.timezone, true);
+};
+const undoOp = (op) => (op.type === 'skip' ? { ...op, type: 'unskip' }
+  : op.type === 'unskip' ? { ...op, type: 'skip' } : { ...op, to: op.from, from: op.to });
+
+async function runOps(subId, ops, after) {
+  const done = [];
+  try {
+    for (const op of ops) { await doOp(subId, op); done.push(op); }
+    if (after) await after();
+  } catch (e) {
+    for (const op of done.reverse()) {
+      try { await doOp(subId, undoOp(op)); }
+      catch (e2) { console.error('[portal] ⚠ retour arrière incomplet, à vérifier dans Seal', subId, op, e2.message); }
+    }
+    throw e;
+  }
+}
+
+/**
  * Nouvelle date pour la prochaine livraison ; les suivantes repartent de cette date (reset_schedule).
- * Toujours dans la fenêtre autorisée : au plus tôt dans 2 jours, au plus tard 29 jours après la date prévue.
+ * Toujours dans la fenêtre autorisée : au plus tôt dans 2 jours, au plus tard 29 jours après la date
+ * prévue et jamais le jour de la livraison suivante (Seal le refuse).
  */
 async function moveTo(sub, next, dateStr) {
-  const win = ov.dateWindow(next);
+  const win = ov.dateWindow(next, ov.loadConfig(), Date.now(), following(sub));
   if (!win || dateStr < win.min || dateStr > win.max) return 'Cette date n\'est pas possible.';
   const slot = ov.slotOn(next.date, dateStr);
   await actions.reschedule(sub.id, next.id, slot.date, slot.time, slot.timezone, true);
@@ -179,6 +212,7 @@ act('date', async (sub, body) => {
 });
 
 act('sauter', async (sub) => {
+  if (ov.pauseOf(sub)) return 'Ton abonnement est en pause : reprends-le d\'abord.';
   const next = ov.nextAttempt(sub);
   if (!active(sub) || !next?.id) return 'Aucune livraison à sauter.';
   if (next.skipped) return 'Cette livraison est déjà sautée.';
@@ -194,6 +228,7 @@ act('reprendre-livraison', async (sub) => {
 });
 
 act('recevoir-maintenant', async (sub) => {
+  if (ov.pauseOf(sub)) return 'Ton abonnement est en pause : reprends-le d\'abord.';
   const next = ov.nextAttempt(sub);
   if (!active(sub) || !next?.id || next.skipped) return 'Aucune livraison à avancer.';
   await actions.processNow(sub.id, next.id);
@@ -210,32 +245,28 @@ act('cadeau', async (sub, body) => {
   return null;
 });
 
-// Pause 1 ou 2 mois : la prochaine livraison est repoussée d'autant (les suivantes repartent de là).
-// Dans Seal l'abonnement reste actif : il reprend tout seul, sans rien à relancer.
+// Pause 1 ou 2 mois : aucune livraison jusqu'à la reprise, puis l'abonnement reprend tout seul.
+// Dans Seal l'abonnement reste actif (livraisons sautées ou reportées, voir overview.planPause).
 act('pause', async (sub, body) => {
   const mois = Number(body.mois);
   if (!(ov.loadConfig().pause_mois || [1, 2]).includes(mois)) return 'Durée de pause non proposée.';
-  const { next, refus } = movable(sub);
+  const { refus } = movable(sub);
   if (refus) return refus;
-  const depuis = ov.dayOf(next.date);
-  const jusqu = ov.addMonths(depuis, mois);
-  const slot = ov.slotOn(next.date, jusqu);
-  await actions.reschedule(sub.id, next.id, slot.date, slot.time, slot.timezone, true);
-  await seal.upsertNotes(sub.id, [{ name: ov.PAUSE_NOTE, value: `${depuis}|${jusqu}` }]);
+  const plan = ov.planPause(sub, mois);
+  if (!plan) return 'Aucune livraison à mettre en pause.';
+  await runOps(sub.id, plan.ops, () => seal.upsertNotes(sub.id, [{ name: ov.PAUSE_NOTE, value: JSON.stringify(plan.note) }]));
   return null;
 });
 
-// Reprendre plus tôt : retour à la date d'origine (ou au plus tôt possible si elle est passée)
+// Reprendre plus tôt : on défait la pause (jamais de livraison avant J+2)
 act('fin-pause', async (sub) => {
-  const { next, refus } = movable(sub);
-  if (refus) return refus;
-  const pause = ov.pauseOf(sub, next);
+  if (!active(sub)) return "L'abonnement n'est pas actif.";
+  const pause = ov.pauseOf(sub);
   if (!pause) return "L'abonnement n'est pas en pause.";
   const earliest = ov.addDays(ov.parisToday(), ov.loadConfig().report?.min_jours ?? 2);
-  const dateStr = pause.depuis && pause.depuis >= earliest ? pause.depuis : earliest;
-  const slot = ov.slotOn(next.date, dateStr);
-  await actions.reschedule(sub.id, next.id, slot.date, slot.time, slot.timezone, true);
-  await clearPause(sub);
+  const plan = ov.planResume(sub, pause, earliest);
+  if (!plan) return "L'abonnement n'est pas en pause.";
+  await runOps(sub.id, plan.ops, () => clearPause(sub));
   return null;
 });
 

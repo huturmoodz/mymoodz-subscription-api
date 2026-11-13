@@ -4,8 +4,8 @@
     "decalages_jours : décalages proposés pour la prochaine livraison.",
     "progression.prix_paquet_eur : prix moyen d'un paquet de cigarettes, pour l'estimation des économies (si le client a donné sa consommation).",
     "Les paliers de fidélité ne sont plus ici : ils se règlent dans Shopify (Contenu → Métaobjets → « Palier fidélité (abonnés) »).",
-    "report.min_jours / max_jours : dates possibles pour la prochaine livraison (au plus tôt dans N jours, au plus tard N jours après la date prévue).",
-    "pause_mois : durées de pause proposées. La pause repousse la prochaine livraison ; l'abonnement reprend tout seul à la date indiquée."
+    "report.min_jours / max_jours : dates possibles pour la prochaine livraison (au plus tôt dans N jours, au plus tard N jours après la date prévue, et toujours avant la livraison suivante).",
+    "pause_mois : durées de pause proposées. Pendant la pause, pas de livraison ; l'abonnement reprend tout seul (livraisons sautées ou reportées dans Seal, jamais une pause Seal)."
   ],
   "decalages_jours": [
     7,
