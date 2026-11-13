@@ -84,4 +84,16 @@ function shiftDate(iso, days) {
   return new Date(d.getTime() + Number(days) * DAY).toISOString().slice(0, 10);
 }
 
-module.exports = { loadConfig, isSkipped, nextAttempt, deliveriesCount, progression, contenu, shiftDate };
+/**
+ * Nouveau créneau pour Seal (date + heure + fuseau) : Seal refuse un report sans heure
+ * (« Time is missing », constaté le 13/11). On garde l'heure prévue de l'échéance, en UTC.
+ */
+function shiftSlot(iso, days) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const n = new Date(d.getTime() + Number(days) * DAY);
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim());
+  return { date: n.toISOString().slice(0, 10), time: dateOnly ? '12:00' : n.toISOString().slice(11, 16), timezone: '+00:00' };
+}
+
+module.exports = { loadConfig, isSkipped, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot };
