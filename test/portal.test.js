@@ -11,6 +11,7 @@ const express = require('express');
 const ov = require('../core/portal/overview');
 const seal = require('../core/kits/seal');
 const actions = require('../core/portal/sealPortal');
+const rewards = require('../core/rewards/engine');
 
 const SUB = () => ({
   id: 77, email: 'a@b.fr', status: 'ACTIVE', created_at: '2026-10-01T10:00:00Z',
@@ -23,14 +24,11 @@ const SUB = () => ({
   ],
 });
 
-test('vue : prochaine livraison, contenu, livraisons reçues, prochain palier', () => {
+test('vue : prochaine livraison, contenu, livraisons reçues, progression', () => {
   const s = SUB();
   assert.deepEqual(ov.nextAttempt(s), { id: '2', date: '2026-11-30', skipped: false });
   assert.equal(ov.contenu(s).total, 49.9);
   assert.equal(ov.deliveriesCount(s), 2);
-  const p = ov.paliers(s);
-  assert.equal(p.prochain.livraisons, 3);
-  assert.equal(p.prochain.restantes, 1);
   const pr = ov.progression(s, Date.parse('2026-11-13T10:00:00Z'), ov.loadConfig(), 1);
   assert.equal(pr.jours, 43);
   assert.equal(pr.economies_eur, Math.round(43 * 1 * 12.5));
@@ -61,6 +59,7 @@ test('actions : décaler de 15 jours, refuser 10 jours, refuser un abonnement qu
   seal.findSubscriptionsByEmail = async () => [{ id: 77 }];
   actions.reschedule = async (id, att, date) => { calls.push(['reschedule', att, date]); cur.billing_attempts[1].date = date; };
   actions.skip = async (id, att) => { calls.push(['skip', att]); cur.billing_attempts[1].status = 'skipped'; };
+  rewards.statusFor = async () => ({ livraisons: 2, paliers: [], prochain: null });
   const app = express(); app.use(express.json());
   app.use('/kits/portal', require('../core/portal/portalApi'));
 
@@ -82,4 +81,5 @@ test('actions : décaler de 15 jours, refuser 10 jours, refuser un abonnement qu
   r = await call(app, 'GET', '/kits/portal/overview');
   assert.equal(r.status, 200);
   assert.equal(r.json.abonnements.length, 1);
+  assert.equal(r.json.fidelite.livraisons, 2);
 });
