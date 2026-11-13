@@ -41,7 +41,25 @@ function nextAttempt(sub) {
     .sort((a, b) => new Date(dateOf(a)) - new Date(dateOf(b)));
   const a = list[0];
   if (!a) return sub.next_billing_date ? { id: null, date: sub.next_billing_date, skipped: false } : null;
-  return { id: String(a.id), date: dateOf(a), skipped: isSkipped(a) };
+  const out = { id: String(a.id), date: dateOf(a), skipped: isSkipped(a) };
+  // Livraison sautée : la vraie prochaine livraison (la première suivante non sautée), pour l'afficher
+  if (out.skipped) {
+    const real = list.find((x) => !isSkipped(x));
+    out.suivante = real ? dateOf(real) : null;
+  }
+  return out;
+}
+
+/** Adresse de livraison de l'abonnement (champs s_* de Seal), ou null si absente. */
+function adresse(sub) {
+  const v = (k) => String(sub?.[k] ?? '').trim();
+  if (!v('s_address1')) return null;
+  return {
+    nom: [v('s_first_name'), v('s_last_name')].filter(Boolean).join(' '),
+    lignes: [v('s_company'), v('s_address1'), v('s_address2')].filter(Boolean),
+    ville: [v('s_zip'), v('s_city')].filter(Boolean).join(' '),
+    pays: v('s_country'),
+  };
 }
 
 /** Livraisons reçues = commande d'origine + renouvellements traités. */
@@ -96,4 +114,4 @@ function shiftSlot(iso, days) {
   return { date: n.toISOString().slice(0, 10), time: dateOnly ? '12:00' : n.toISOString().slice(11, 16), timezone: '+00:00' };
 }
 
-module.exports = { loadConfig, isSkipped, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot };
+module.exports = { loadConfig, isSkipped, adresse, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot };
