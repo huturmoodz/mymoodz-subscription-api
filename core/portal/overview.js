@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { config, isBoxVariant } = require('../kits/config');
+const { config, isBoxVariant, rangeOf, monthsOf, rituelOf } = require('../kits/config');
 
 function loadConfig() {
   return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
@@ -114,4 +114,75 @@ function shiftSlot(iso, days) {
   return { date: n.toISOString().slice(0, 10), time: dateOnly ? '12:00' : n.toISOString().slice(11, 16), timezone: '+00:00' };
 }
 
-module.exports = { loadConfig, isSkipped, adresse, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot };
+/* ---------- Gamme de l'abonnement ---------- */
+
+/**
+ * Gamme de l'abonnement, d'après les identifiants de variantes (jamais d'après les titres) :
+ * « zero » s'il contient une Recharge ZÉRO Saveurs, sinon « rituel » s'il contient une recharge RITUEL,
+ * sinon « ancienne » (ancienne gamme : pas de saveurs ni de formule en libre-service).
+ */
+function gammeOf(sub) {
+  const ranges = (sub.items || []).filter((it) => Number(it.quantity || 0) > 0 && !isBoxVariant(it.variant_id))
+    .map((it) => rangeOf(it.variant_id));
+  if (ranges.includes('zero')) return 'zero';
+  if (ranges.includes('rituel')) return 'rituel';
+  return 'ancienne';
+}
+
+/** Durée (en mois) de la formule d'un abonnement ZÉRO Saveurs ou RITUEL ; null pour l'ancienne gamme. */
+function formuleMois(sub) {
+  for (const it of sub.items || []) {
+    if (Number(it.quantity || 0) <= 0) continue;
+    if (rangeOf(it.variant_id) === 'zero') return monthsOf(it.variant_id);
+    const r = rituelOf(it.variant_id);
+    if (r) return r.months;
+  }
+  return null;
+}
+
+/* ---------- Dates : calendrier et pause ---------- */
+
+const ymd = (d) => d.toISOString().slice(0, 10);
+/** Date du jour à Paris (AAAA-MM-JJ). */
+const parisToday = (now = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
+const addDays = (dateStr, n) => ymd(new Date(Date.parse(`${dateStr}T12:00:00Z`) + Number(n) * DAY));
+/** + n mois calendaires, même jour (ramené à la fin du mois si besoin : 31 janv. + 1 mois = 28/29 févr.). */
+function addMonths(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const first = new Date(Date.UTC(y, m - 1 + Number(n), 1));
+  const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return ymd(new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d, last))));
+}
+const dayOf = (iso) => String(iso || '').slice(0, 10);
+
+/**
+ * Dates qu'un abonné peut choisir pour sa prochaine livraison :
+ * au plus tôt dans « min » jours, au plus tard « max » jours après la date prévue. Au-delà : la pause.
+ */
+function dateWindow(next, cfg = loadConfig(), now = Date.now()) {
+  if (!next?.date) return null;
+  const min = addDays(parisToday(now), cfg.report?.min_jours ?? 2);
+  const max = addDays(dayOf(next.date), cfg.report?.max_jours ?? 29);
+  return min <= max ? { min, max } : null;
+}
+
+/** Créneau Seal pour une date donnée, en gardant l'heure prévue de l'échéance (UTC). */
+function slotOn(iso, dateStr) {
+  const d = new Date(iso);
+  const time = Number.isNaN(d.getTime()) || /^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim()) ? '12:00' : d.toISOString().slice(11, 16);
+  return { date: dateStr, time, timezone: '+00:00' };
+}
+
+/** Pause « maison » (report de la prochaine livraison) : note Seal « date d'origine|date de reprise ». */
+const PAUSE_NOTE = 'mmz_pause';
+function pauseOf(sub, next) {
+  const raw = String((sub.note_attributes || []).find((a) => a.name === PAUSE_NOTE)?.value || '');
+  const [depuis, jusqu] = raw.split('|');
+  if (!jusqu || !next?.date || next.skipped || dayOf(next.date) !== jusqu) return null;
+  return { depuis, jusqu_au: jusqu };
+}
+
+module.exports = {
+  loadConfig, isSkipped, adresse, nextAttempt, deliveriesCount, progression, contenu, shiftDate, shiftSlot,
+  gammeOf, formuleMois, parisToday, addDays, addMonths, dateWindow, slotOn, dayOf, PAUSE_NOTE, pauseOf,
+};
