@@ -68,7 +68,7 @@ function normalize(node, known = mylinkSkus()) {
     handle: node.handle,
     nom: val('nom') || node.handle,
     actif: val('actif') === 'true',
-    livraisons: parseInt(val('livraisons'), 10),
+    mois: parseInt(val('mois'), 10),
     titre: val('titre_client'),
     message: val('message'),
     quantite: parseInt(val('quantite'), 10) || 1,
@@ -77,7 +77,7 @@ function normalize(node, known = mylinkSkus()) {
   };
 
   const p = tier.problemes;
-  if (!Number.isInteger(tier.livraisons) || tier.livraisons < 1) p.push('numéro de livraison invalide');
+  if (!Number.isInteger(tier.mois) || tier.mois < 1) p.push("nombre de mois d'abonnement invalide");
   if (!tier.titre) p.push('texte affiché vide');
   if (!variant) p.push('aucun produit offert choisi');
   else {
@@ -93,14 +93,14 @@ function normalize(node, known = mylinkSkus()) {
 /** Un palier peut-il être offert ? (actif ET sans problème) */
 const offrable = (t) => t.actif && t.problemes.length === 0;
 
-/** Paliers triés par numéro de livraison. Lecture Shopify avec cache ; null si illisible. */
+/** Paliers triés par nombre de mois. Lecture Shopify avec cache ; null si illisible. */
 async function loadTiers({ force = false } = {}) {
   if (!force && cache.value && Date.now() - cache.at < CACHE_MS) return cache.value;
   try {
     const d = await shopify.graphql(QUERY, { type: TYPE });
     const known = mylinkSkus();
     const list = (d.metaobjects?.nodes || []).map((n) => normalize(n, known))
-      .sort((a, b) => (a.livraisons || 0) - (b.livraisons || 0));
+      .sort((a, b) => (a.mois || 0) - (b.mois || 0));
     cache = { at: Date.now(), value: list };
     return list;
   } catch (e) {

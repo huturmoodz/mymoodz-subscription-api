@@ -1,6 +1,9 @@
 // core/rewards/engine.js
-// Cadeaux de fidélité des abonnés : à la N-ième livraison d'abonnement (Recharge ZÉRO Saveurs),
-// le produit offert du palier est ajouté à 0 € DANS le colis, une seule fois par client.
+// Cadeaux de fidélité des abonnés : quand l'abonné atteint N mois d'abonnement (Recharge ZÉRO
+// Saveurs payée en abonnement), le produit offert du palier est ajouté à 0 € DANS le colis qui lui fait
+// franchir ce cap, une seule fois par client.
+// Les paliers se comptent en MOIS couverts, pas en colis : un colis « 3 mois » compte 3 mois. Ainsi
+// la formule 3 mois atteint ses cadeaux plus vite (palier 3 mois dès son 1er colis), jamais plus lentement.
 //
 // Où ça se branche : webhook « commande créée / modifiée », AVANT le traitement des kits.
 // À ce moment, la commande est encore en attente (règle Flow « MMZ-KIT ») : MyLink ne l'a pas.
@@ -10,10 +13,10 @@
 //
 // Règles de sécurité :
 //  - seulement si la commande est encore retenue par NOTRE attente (sinon MyLink a pu la prendre) ;
-//    le cadeau est alors reporté à la livraison suivante (rattrapage) ;
-//  - cadeau en rupture : reporté à la livraison suivante, jamais d'ajout d'un produit absent ;
-//  - un palier activé après coup n'est pas offert en masse aux anciens abonnés : seulement à la
-//    livraison prévue, ou à la suivante en rattrapage (REWARDS_RATTRAPAGE, 1 par défaut) ;
+//    le cadeau est alors reporté au colis suivant (rattrapage) ;
+//  - cadeau en rupture : reporté au colis suivant, jamais d'ajout d'un produit absent ;
+//  - un palier activé après coup n'est pas offert en masse aux anciens abonnés : seulement si le
+//    client a franchi le cap depuis moins de REWARDS_RATTRAPAGE_MOIS mois (3 par défaut) ;
 //  - « déjà offert » = tag mmz-cadeau-<palier> sur une commande non annulée du client
 //    (ou le produit offert déjà présent dans la commande) : rejouer un webhook n'offre jamais deux fois.
 //
@@ -22,15 +25,15 @@
 // _mmz_test=1 : les vrais clients ne reçoivent rien), live (ajoute réellement le cadeau).
 
 const shopify = require('../kits/shopify');
-const { isParentVariant } = require('../kits/config');
+const { isParentVariant, monthsOf } = require('../kits/config');
 const { withLock } = require('../kits/lock');
 const { loadTiers, offrable } = require('./tiers');
 const { componentSources } = require('../stock/bundles');
 
 const mode = () => String(process.env.REWARDS_MODE || 'off').toLowerCase();
 const rattrapage = () => {
-  const n = parseInt(process.env.REWARDS_RATTRAPAGE, 10);
-  return Number.isInteger(n) && n >= 0 ? n : 1;
+  const n = parseInt(process.env.REWARDS_RATTRAPAGE_MOIS, 10);
+  return Number.isInteger(n) && n >= 0 ? n : 3;
 };
 const TAG_PREFIX = 'mmz-cadeau-';
 const tagOf = (handle) => TAG_PREFIX + handle;
@@ -59,20 +62,34 @@ function isSubscriptionDelivery(order) {
 const isTest = (order) => (order.tags || []).includes('mmz-test')
   || (order.customAttributes || []).some((a) => a.key === '_mmz_test' && String(a.value) === '1');
 
-/** Numéro de livraison d'abonnement de « order » parmi l'historique du client (commande comprise). */
-function deliveryNumber(history, order) {
-  const t = new Date(order.createdAt).getTime();
-  const withTests = isTest(order);
-  const others = history.filter((o) => o.id !== order.id
-    && isSubscriptionDelivery(o)
-    && new Date(o.createdAt).getTime() <= t
-    && (withTests || !isTest(o)));
-  return others.length + (isSubscriptionDelivery(order) ? 1 : 0);
+/** Mois d'abonnement couverts par une commande (Recharge 1, 2 ou 3 mois × quantité). */
+function monthsOfOrder(order) {
+  if (!isSubscriptionDelivery(order)) return 0;
+  return (order.lineItems?.nodes || [])
+    .filter((l) => isParentVariant(vid(l)) && l.sellingPlan && qtyOf(l) > 0)
+    .reduce((s, l) => s + monthsOf(vid(l)) * qtyOf(l), 0);
 }
 
-/** Livraisons d'abonnement déjà passées (pour le portail). */
-function deliveriesSoFar(history, { withTests = false } = {}) {
-  return history.filter((o) => isSubscriptionDelivery(o) && (withTests || !isTest(o))).length;
+/** Mois déjà couverts AVANT « order » (commandes d'abonnement plus anciennes du client). */
+function monthsBefore(history, order) {
+  const t = new Date(order.createdAt).getTime();
+  const withTests = isTest(order);
+  return history.filter((o) => o.id !== order.id
+    && isSubscriptionDelivery(o)
+    && new Date(o.createdAt).getTime() < t
+    && (withTests || !isTest(o)))
+    .reduce((s, o) => s + monthsOfOrder(o), 0);
+}
+
+/** Pour le portail : mois couverts, nombre de colis, et mois couverts par le dernier colis (sa formule). */
+function soFar(history, { withTests = false } = {}) {
+  const subs = history.filter((o) => isSubscriptionDelivery(o) && (withTests || !isTest(o)))
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return {
+    mois: subs.reduce((s, o) => s + monthsOfOrder(o), 0),
+    colis: subs.length,
+    moisParColis: subs.length ? monthsOfOrder(subs[subs.length - 1]) : 1,
+  };
 }
 
 /** Paliers déjà offerts au client (tags posés sur ses commandes non annulées). */
@@ -85,28 +102,34 @@ function grantedHandles(history) {
   return set;
 }
 
-/** Paliers à offrir dans la livraison n°n. */
-function decide({ tiers, n, granted, late = rattrapage() }) {
-  return (tiers || []).filter((t) => offrable(t) && !granted.has(t.handle) && n >= t.livraisons && n <= t.livraisons + late);
+/**
+ * Paliers à offrir dans le colis qui fait passer le client de « before » à « after » mois.
+ * Cap franchi par ce colis, ou franchi récemment sans cadeau (rattrapage, « late » mois).
+ */
+function decide({ tiers, before, after, granted, late = rattrapage() }) {
+  return (tiers || []).filter((t) => offrable(t) && !granted.has(t.handle) && after >= t.mois && before < t.mois + late);
 }
 
 /** Vue « fidélité » du portail : où en est le client, ce qu'il a reçu, ce qui arrive. */
-function status({ tiers, n, granted }) {
-  const visibles = (tiers || []).filter((t) => t.titre && Number.isInteger(t.livraisons));
+function status({ tiers, n, colis = 0, moisParColis = 1, granted }) {
+  const visibles = (tiers || []).filter((t) => t.titre && Number.isInteger(t.mois));
   const paliers = visibles.map((t) => {
     let statut;
     if (granted.has(t.handle)) statut = 'offert';
     else if (!offrable(t)) statut = 'bientot';
-    else if (t.livraisons > n) statut = 'a_venir';
-    else if (n <= t.livraisons + rattrapage()) statut = 'en_cours';   // reporté (rupture, attente levée…)
+    else if (t.mois > n) statut = 'a_venir';
+    else if (n < t.mois + rattrapage()) statut = 'en_cours';   // cap franchi, cadeau en route ou reporté
     else statut = 'passe';
+    const restants = Math.max(0, t.mois - n);
     return {
-      livraisons: t.livraisons, titre: t.titre, message: t.message || '', statut,
-      restantes: Math.max(0, t.livraisons - n),
+      mois: t.mois, titre: t.titre, message: t.message || '', statut,
+      mois_restants: restants,
+      // le prochain colis (même formule) suffit-il à franchir le cap ?
+      prochain_colis: statut === 'a_venir' && restants <= moisParColis,
     };
   }).filter((p) => p.statut !== 'passe');
   const prochain = paliers.find((p) => p.statut === 'a_venir' || p.statut === 'bientot') || null;
-  return { livraisons: n, paliers, prochain };
+  return { mois: n, colis, mois_par_colis: moisParColis, paliers, prochain };
 }
 
 /* ------------------------- accès Shopify ------------------------- */
@@ -247,12 +270,13 @@ async function applyToOrder(orderId, { force } = {}) {
       if (!tiers) return { skipped: true, reason: 'paliers_illisibles' };
 
       const history = await customerHistory(order.customer.id);
-      const n = deliveryNumber(history, order);
+      const before = monthsBefore(history, order);
+      const after = before + monthsOfOrder(order);
       const granted = grantedHandles(history);
       const lines = order.lineItems?.nodes || [];
-      const result = { order: order.name, livraison: n, offerts: [], reportes: [], mode: m };
+      const result = { order: order.name, mois_avant: before, mois_apres: after, offerts: [], reportes: [], mode: m };
 
-      for (const tier of decide({ tiers, n, granted })) {
+      for (const tier of decide({ tiers, before, after, granted })) {
         const already = lines.some((l) => vid(l) === tier.produit.id && qtyOf(l) > 0);
         if (already) {
           if (m === 'live' || m === 'test') await addTag(order.id, tagOf(tier.handle));
@@ -292,11 +316,12 @@ async function statusFor(customerId) {
   if (!tiers) return null;
   const history = await customerHistory(customerId);
   // En mode test, les commandes de test comptent (pour qu'Hugo voie sa progression pendant ses essais)
-  return status({ tiers, n: deliveriesSoFar(history, { withTests: mode() === 'test' }), granted: grantedHandles(history) });
+  const f = soFar(history, { withTests: mode() === 'test' });
+  return status({ tiers, n: f.mois, colis: f.colis, moisParColis: f.moisParColis, granted: grantedHandles(history) });
 }
 
 module.exports = {
   mode, applyToOrder, statusFor,
   // calculs purs (tests)
-  isSubscriptionDelivery, deliveryNumber, deliveriesSoFar, grantedHandles, decide, status, stillHeld, tagOf,
+  isSubscriptionDelivery, monthsOfOrder, monthsBefore, soFar, grantedHandles, decide, status, stillHeld, tagOf,
 };
