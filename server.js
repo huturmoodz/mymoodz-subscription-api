@@ -158,6 +158,12 @@ app.use(
   cors({ origin: KITS_ORIGINS, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }),
   require('./core/portal/portalApi')
 );
+// ✅ « Suivre ma commande » (public, sans connexion : n° de suivi, ou n° de commande + e-mail d'achat)
+app.use(
+  '/kits/suivi',
+  cors({ origin: KITS_ORIGINS, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }),
+  require('./core/suivi/suiviApi')
+);
 app.use(
   '/kits',
   cors({ origin: KITS_ORIGINS, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }),
