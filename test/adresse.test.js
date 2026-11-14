@@ -26,9 +26,11 @@ test('validation : adresse correcte → champs Seal, pays inchangé', () => {
   assert.deepEqual(r.edit, {
     s_first_name: 'Jeanne', s_last_name: 'Martin', s_company: '', s_address1: '3 place Bellecour', s_address2: 'Bât. B',
     s_zip: '69002', s_city: 'Lyon', s_phone: '06 12 34 56 78',
+    // Seal exige le pays à chaque changement d'adresse : celui de l'abonnement, inchangé
+    s_country: 'France', s_country_code: 'FR', s_province: '', s_province_code: '',
   });
-  assert.equal('s_country' in r.edit, false);
-  assert.equal('s_country_code' in r.edit, false);
+  // Même si le client envoie un autre pays, il est ignoré
+  assert.equal(adresse.valider({ ...OK, pays: 'Belgique', pays_code: 'BE' }, SUB()).edit.s_country_code, 'FR');
 });
 
 test('validation : champs manquants, code postal français, téléphone, texte nettoyé', () => {

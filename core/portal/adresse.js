@@ -54,6 +54,11 @@ function valider(body, sub) {
       s_zip: f.cp,
       s_city: f.ville,
       s_phone: f.telephone,
+      // Seal exige le pays à chaque changement d'adresse : on renvoie celui de l'abonnement, inchangé
+      s_country: String(sub?.s_country ?? '').trim(),
+      s_country_code: pays,
+      s_province: String(sub?.s_province ?? '').trim(),
+      s_province_code: String(sub?.s_province_code ?? '').trim(),
     },
   };
 }
