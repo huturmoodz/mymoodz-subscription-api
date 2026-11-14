@@ -10,6 +10,7 @@ const { withLock } = require('../kits/lock');
 const actions = require('./sealPortal');
 const ov = require('./overview');
 const rewards = require('../rewards/engine');
+const adresse = require('./adresse');
 
 const router = express.Router();
 
@@ -55,7 +56,9 @@ function view(sub, paquetsParJour) {
     progression: ov.progression(sub, Date.now(), cfg, paquetsParJour),
     decalages_jours: cfg.decalages_jours || [7, 15],
     adresse: ov.adresse(sub),
-    // Lien Seal propre à cet abonné (modifier adresse, paiement…). Renvoyé seulement à son propriétaire.
+    // Champs du formulaire « Modifier l'adresse » (renvoyés seulement à son propriétaire)
+    adresse_champs: adresse.champs(sub),
+    // Lien Seal propre à cet abonné (paiement…). Renvoyé seulement à son propriétaire.
     modifier_url: sub.edit_url || null,
   };
 }
@@ -267,6 +270,15 @@ act('fin-pause', async (sub) => {
   const plan = ov.planResume(sub, pause, earliest);
   if (!plan) return "L'abonnement n'est pas en pause.";
   await runOps(sub.id, plan.ops, () => clearPause(sub));
+  return null;
+});
+
+// Adresse des prochaines livraisons (le pays ne change pas ici ; une commande déjà passée se modifie avec Relocate)
+act('adresse', async (sub, body) => {
+  if (!/^(ACTIVE|PAUSED)$/i.test(String(sub.status || ''))) return "L'abonnement n'est pas actif.";
+  const { edit, refus } = adresse.valider(body, sub);
+  if (refus) return refus;
+  await seal.editSubscription(sub.id, edit);
   return null;
 });
 
