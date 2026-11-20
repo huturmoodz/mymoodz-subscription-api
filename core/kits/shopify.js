@@ -7,7 +7,9 @@ const DOMAIN = process.env.SHOPIFY_STORE_DOMAIN; // ex. testshopilol.myshopify.c
 const STATIC_TOKEN = process.env.SHOPIFY_KITS_ACCESS_TOKEN || '';
 const CLIENT_ID = process.env.SHOPIFY_KITS_CLIENT_ID || '';
 const CLIENT_SECRET = process.env.SHOPIFY_KITS_CLIENT_SECRET || '';
-const VERSION = process.env.SHOPIFY_KITS_API_VERSION || '2025-10';
+// 2025-10 n'est plus servie par Shopify depuis le 16/10/2026 (bascule automatique sur 2026-01, elle-même
+// retirée le 16/01/2027) : on vise la dernière version stable.
+const VERSION = process.env.SHOPIFY_KITS_API_VERSION || '2026-10';
 // Webhooks créés dans l'admin (Paramètres > Notifications) : signés avec le secret de la boutique.
 // Webhooks créés par l'app du Dev Dashboard : signés avec le secret client de l'app.
 const WEBHOOK_SECRETS = [process.env.SHOPIFY_WEBHOOK_SECRET, CLIENT_SECRET].filter(Boolean);
@@ -107,13 +109,12 @@ async function ensureOrderWebhook(callbackUrl) {
   // Création : traitement immédiat. Mise à jour : rattrape un upsell post-achat ou une édition manuelle.
   for (const topic of ['ORDERS_CREATE', 'ORDERS_UPDATED']) {
     const data = await graphql(`query Subs($topics: [WebhookSubscriptionTopic!]) {
-      webhookSubscriptions(first: 50, topics: $topics) {
-        nodes { id endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } } } }`, { topics: [topic] });
-    const exists = (data.webhookSubscriptions?.nodes || []).some((n) => n.endpoint?.callbackUrl === callbackUrl);
+      webhookSubscriptions(first: 50, topics: $topics) { nodes { id uri } } }`, { topics: [topic] });
+    const exists = (data.webhookSubscriptions?.nodes || []).some((n) => n.uri === callbackUrl);
     if (exists) { result[topic] = 'exists'; continue; }
     const created = await graphql(
-      `mutation Sub($topic: WebhookSubscriptionTopic!, $url: URL!) {
-        webhookSubscriptionCreate(topic: $topic, webhookSubscription: { callbackUrl: $url, format: JSON }) {
+      `mutation Sub($topic: WebhookSubscriptionTopic!, $url: String!) {
+        webhookSubscriptionCreate(topic: $topic, webhookSubscription: { uri: $url, format: JSON }) {
           webhookSubscription { id }
           userErrors { field message }
         }
@@ -131,6 +132,7 @@ query KitOrder($id: ID!) {
   order(id: $id) {
     id
     name
+    createdAt
     tags
     customAttributes { key value }
     cancelledAt
@@ -149,7 +151,7 @@ query KitOrder($id: ID!) {
         id
         status
         fulfillmentHolds { id handle reasonNotes }
-        lineItems(first: 50) { nodes { id remainingQuantity lineItem { variant { id } } } }
+        lineItems(first: 50) { nodes { id remainingQuantity requiresShipping lineItem { variant { id } } } }
       }
     }
   }

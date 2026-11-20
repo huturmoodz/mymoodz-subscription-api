@@ -8,6 +8,9 @@
 //   5. clôt la ligne Recharge (elle n'est pas un colis : seules les boîtes partent chez MyLink).
 // La mise en attente est d'abord posée par Shopify Flow à la création de la commande (instantané,
 // même si ce serveur gratuit est en veille) ; le serveur la reconnaît par la note « MMZ-KIT ».
+// Délai logisticien (flux Flow « MMZ-DELAI-15 ») : cette attente-là n'est jamais levée ici, c'est Flow qui
+// la lève au bout de 15 minutes ; avant de lever les nôtres, on l'étend aux demandes d'expédition créées
+// entre-temps (boîtes ajoutées), voir delayGuard.js.
 // Le traitement est idempotent : il recalcule toujours « ce qui devrait être » et n'ajoute
 // que ce qui manque. Il peut donc être rejoué sans risque (webhook reçu deux fois, reprise
 // après une panne, upsell post-achat ajouté plus tard…).
@@ -16,6 +19,7 @@ const { config, isParentVariant, isBoxVariant, monthsOf, kitsLive } = require('.
 const { parseComposition, validateComposition, rescale, diff, describe, totalOf } = require('./composition');
 const shopify = require('./shopify');
 const { withLock } = require('./lock');
+const delayGuard = require('./delayGuard');
 
 const HOLD_HANDLE = 'mmz-kit';
 const FLOW_MARK = 'MMZ-KIT';
@@ -104,23 +108,44 @@ async function holdAll(order, notes) {
   }
 }
 
-async function releaseAll(orderId) {
+/**
+ * Lève NOS attentes, sur l'état à jour de la commande (après ajout des boîtes, les nouvelles demandes
+ * d'expédition sont prises en compte). Avant de lever quoi que ce soit, on pose les attentes qui doivent
+ * rester : commande de test (jamais transmise à MyLink) et délai logisticien (levé par Flow à 15 min).
+ */
+async function releaseAll(orderId, { test = false } = {}) {
   const fresh = await shopify.getOrder(orderId);
+  if (test) {
+    for (const fo of openFOs(fresh)) {
+      if (!(fo.fulfillmentHolds || []).some((h) => h.handle === TEST_HANDLE)) {
+        await shopify.holdFulfillmentOrder(fo.id, 'MMZ-TEST commande de test : ne pas expédier', TEST_HANDLE);
+      }
+    }
+  }
+  await delayGuard.protect(fresh);
   for (const fo of fresh.fulfillmentOrders?.nodes || []) {
     const ours = (fo.fulfillmentHolds || []).filter(isOurHold).map((h) => h.id);
     if (ours.length) await shopify.releaseFulfillmentOrderHold(fo.id, ours);
   }
-  return fresh;
 }
 
-/** Clôt les demandes d'expédition qui ne contiennent QUE des lignes Recharge (emplacement hors MyLink). */
-async function closeParentOnlyFOs(order) {
+/**
+ * Clôt les demandes d'expédition qui ne contiennent QUE des lignes Recharge : rien de physique
+ * (MyLink ne les enregistre pas), le contenu part avec les boîtes. Une telle demande peut encore
+ * porter une attente (délai logisticien, test) : elle n'a plus d'objet, on la lève avant de clore.
+ * Relit la commande : l'état doit être celui d'après la levée des attentes.
+ */
+async function closeParentOnlyFOs(orderId) {
+  const order = await shopify.getOrder(orderId);
   for (const fo of order.fulfillmentOrders?.nodes || []) {
-    if (!['OPEN', 'IN_PROGRESS'].includes(fo.status)) continue;
+    if (!['OPEN', 'IN_PROGRESS', 'ON_HOLD'].includes(fo.status)) continue;
     const lines = (fo.lineItems?.nodes || []).filter((l) => Number(l.remainingQuantity) > 0);
     if (!lines.length) continue;
     const onlyParents = lines.every((l) => isParentVariant(shopify.legacyId(l.lineItem?.variant?.id)));
-    if (onlyParents) await shopify.fulfillWithoutShipping(fo.id, 'Recharge composée : contenu expédié via les boîtes saveur');
+    if (!onlyParents) continue;
+    const holds = (fo.fulfillmentHolds || []).map((h) => h.id);
+    if (fo.status === 'ON_HOLD' && holds.length) await shopify.releaseFulfillmentOrderHold(fo.id, holds);
+    await shopify.fulfillWithoutShipping(fo.id, 'Recharge composée : contenu expédié via les boîtes saveur');
   }
 }
 
@@ -211,19 +236,12 @@ async function processOrder(orderId, source = 'webhook') {
       );
     }
 
+    // Commande complète : on libère MyLink (sauf commande de test : son attente est posée AVANT de lever
+    // les nôtres, sur toutes ses demandes d'expédition, y compris celle des boîtes ajoutées), on clôt la
+    // ligne Recharge, on marque la commande.
     const test = isTestOrder(order);
-    if (test) {
-      // L'attente de test est posée AVANT de lever les nôtres : la commande n'est jamais libre.
-      for (const fo of openFOs(order)) {
-        if (!(fo.fulfillmentHolds || []).some((h) => h.handle === TEST_HANDLE)) {
-          await shopify.holdFulfillmentOrder(fo.id, 'MMZ-TEST commande de test : ne pas expédier', TEST_HANDLE);
-        }
-      }
-    }
-
-    // Commande complète : on libère MyLink, on clôt la ligne Recharge, on marque la commande
-    const fresh = await releaseAll(orderId);
-    await closeParentOnlyFOs(fresh);
+    await releaseAll(orderId, { test });
+    await closeParentOnlyFOs(orderId);
     const tags = order.tags || [];
     if (!tags.includes(config.tags.ok)) await shopify.addTags(orderId, [config.tags.ok]);
     if (tags.includes(config.tags.error)) await shopify.removeTags(orderId, [config.tags.error]);

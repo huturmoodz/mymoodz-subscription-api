@@ -22,13 +22,14 @@ const DEFAULT_CONFIG = {
     '55725002916181': '89.80',
     '55725002948949': '119.70',
   },
-  // Produit « boîte » : une variante par saveur. Ce sont les vrais articles physiques (SKU MyLink).
+  // Produit « boîte » : une variante par saveur. Ce sont les vrais articles physiques (SKU MyLink,
+  // un seul SKU par boîte depuis le 19/11/2026 : BTE-ZERO-…-03 ; l'ancien POD-ZERO-…-03 n'existe plus).
   boxProductId: '11785293332821',
   boxes: {
-    '55665971560789': { code: 'MEN', label: 'Menthe', sku: 'POD-ZERO-MEN-03' },
-    '55665971593557': { code: 'CIT', label: 'Citron', sku: 'POD-ZERO-CIT-03' },
-    '55665971626325': { code: 'PAS', label: 'Pastèque', sku: 'POD-ZERO-PAS-03' },
-    '55665971659093': { code: 'FRA', label: 'Framboise', sku: 'POD-ZERO-FRA-03' },
+    '55665971560789': { code: 'MEN', label: 'Menthe', sku: 'BTE-ZERO-MEN-03' },
+    '55665971593557': { code: 'CIT', label: 'Citron', sku: 'BTE-ZERO-CIT-03' },
+    '55665971626325': { code: 'PAS', label: 'Pastèque', sku: 'BTE-ZERO-PAS-03' },
+    '55665971659093': { code: 'FRA', label: 'Framboise', sku: 'BTE-ZERO-FRA-03' },
   },
   // Gamme RITUEL : un produit par rituel, une variante par durée. Chaque variante est déjà un lot
   // physique (POD-RIT-BN-12 = 4 boîtes Bonnes Nuits) : rien à composer, rien à ajouter à la commande.
