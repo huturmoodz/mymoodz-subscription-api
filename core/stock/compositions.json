@@ -1,18 +1,21 @@
 {
   "_lisezmoi": [
     "Composition de chaque produit vendu (SKU Shopify) en composants physiques stockés chez MyLink.",
-    "Mêmes bundles que le fichier de paramétrage envoyé à MyLink : toute modification se fait ici ET chez MyLink.",
+    "Mêmes bundles que le fichier de paramétrage envoyé à MyLink (OMS v4 du 20/11/2026) : toute modification se fait ici ET chez MyLink.",
+    "Anciens produits (ancien ZÉRO, Bonnes Nuits, Bien-Être) : pas confiés à MyLink (OMS v4), donc absents de ce fichier ; leur stock reste géré à part.",
     "Ajouter un produit = ajouter une ligne dans « produits », sans toucher au code.",
     "Pack fixe : { \"SKU-COMPOSANT\": quantité, ... } -> stock du pack = le composant le plus limitant.",
-    "Boîtes au choix (recharge à composer) : { \"au_choix_parmi\": [composants], \"nombre_de_boites\": N } -> stock = total des boîtes / N ; le composeur bloque lui-même chaque saveur à son propre stock.",
-    "« composants_dans_shopify » : où lire le stock d'un composant quand son SKU Shopify n'est pas le même que chez MyLink. Absent = même SKU."
+    "Boîtes au choix (recharge à composer) : { \"au_choix_parmi\": [composants], \"nombre_de_boites\": N } -> stock = total des boîtes / N ; le composeur grise lui-même chaque saveur à son propre stock.",
+    "« produits_maitres » : produits Shopify (handles) dont la fiche porte le VRAI stock d'un composant, celui que MyLink met à jour (Boîte ZÉRO, Boîte RITUEL, diffuseur).",
+    "Toute autre fiche qui porte le SKU d'un composant (recharge « 1 semaine », boîte cadeau…) est un miroir : son stock est recopié depuis la fiche maître, jamais compté à part.",
+    "« composants_dans_shopify » : uniquement si un composant MyLink a un autre SKU dans Shopify (vide depuis l'unification des SKU du 19/11/2026)."
   ],
-  "composants_dans_shopify": {
-    "BTE-ZERO-MEN-03": "POD-ZERO-MEN-03",
-    "BTE-ZERO-CIT-03": "POD-ZERO-CIT-03",
-    "BTE-ZERO-PAS-03": "POD-ZERO-PAS-03",
-    "BTE-ZERO-FRA-03": "POD-ZERO-FRA-03"
-  },
+  "composants_dans_shopify": {},
+  "produits_maitres": [
+    "boite-zero",
+    "boite-rituel",
+    "diffuseur-essentiel-mymoodz"
+  ],
   "produits": {
     "PACK-ZERO-MEN-03": {
       "BTE-ZERO-MEN-03": 1,
@@ -34,13 +37,15 @@
       "BTE-ZERO-MEN-03": 1,
       "BTE-ZERO-CIT-03": 1,
       "BTE-ZERO-PAS-03": 1,
-      "BTE-ZERO-FRA-03": 1
+      "BTE-ZERO-FRA-03": 1,
+      "DIFF-RECH": 1
     },
     "PACK-ZERO-MIX-24": {
       "BTE-ZERO-MEN-03": 2,
       "BTE-ZERO-CIT-03": 2,
       "BTE-ZERO-PAS-03": 2,
-      "BTE-ZERO-FRA-03": 2
+      "BTE-ZERO-FRA-03": 2,
+      "DIFF-RECH": 1
     },
     "REC-ZERO-1M": {
       "au_choix_parmi": [
@@ -74,10 +79,12 @@
       "DIFF-RECH": 1
     },
     "PACK-RIT-BN-12": {
-      "BTE-RIT-BN-03": 4
+      "BTE-RIT-BN-03": 4,
+      "DIFF-RECH": 1
     },
     "PACK-RIT-BN-24": {
-      "BTE-RIT-BN-03": 8
+      "BTE-RIT-BN-03": 8,
+      "DIFF-RECH": 1
     },
     "POD-RIT-BN-12": {
       "BTE-RIT-BN-03": 4
@@ -93,10 +100,12 @@
       "DIFF-RECH": 1
     },
     "PACK-RIT-BE-12": {
-      "BTE-RIT-BE-03": 4
+      "BTE-RIT-BE-03": 4,
+      "DIFF-RECH": 1
     },
     "PACK-RIT-BE-24": {
-      "BTE-RIT-BE-03": 8
+      "BTE-RIT-BE-03": 8,
+      "DIFF-RECH": 1
     },
     "POD-RIT-BE-12": {
       "BTE-RIT-BE-03": 4
@@ -112,10 +121,12 @@
       "DIFF-RECH": 1
     },
     "PACK-RIT-IC-12": {
-      "BTE-RIT-IC-03": 4
+      "BTE-RIT-IC-03": 4,
+      "DIFF-RECH": 1
     },
     "PACK-RIT-IC-24": {
-      "BTE-RIT-IC-03": 8
+      "BTE-RIT-IC-03": 8,
+      "DIFF-RECH": 1
     },
     "POD-RIT-IC-12": {
       "BTE-RIT-IC-03": 4
@@ -131,10 +142,12 @@
       "DIFF-RECH": 1
     },
     "PACK-RIT-PF-12": {
-      "BTE-RIT-PF-03": 4
+      "BTE-RIT-PF-03": 4,
+      "DIFF-RECH": 1
     },
     "PACK-RIT-PF-24": {
-      "BTE-RIT-PF-03": 8
+      "BTE-RIT-PF-03": 8,
+      "DIFF-RECH": 1
     },
     "POD-RIT-PF-12": {
       "BTE-RIT-PF-03": 4
@@ -149,64 +162,51 @@
       "BTE-RIT-BN-03": 1,
       "BTE-RIT-BE-03": 1,
       "BTE-RIT-IC-03": 1,
-      "BTE-RIT-PF-03": 1
+      "BTE-RIT-PF-03": 1,
+      "DIFF-RECH": 1
     },
     "PACK-RIT-MIX-24": {
       "BTE-RIT-BN-03": 2,
       "BTE-RIT-BE-03": 2,
       "BTE-RIT-IC-03": 2,
-      "BTE-RIT-PF-03": 2
-    },
-    "PACK-ZERO-03": {
-      "BTE-ANC-ZERO-03": 1,
+      "BTE-RIT-PF-03": 2,
       "DIFF-RECH": 1
     },
-    "PACK-ZERO-12": {
-      "BTE-ANC-ZERO-03": 4
+    "POD-ZERO-MIX-12": {
+      "BTE-ZERO-MEN-03": 1,
+      "BTE-ZERO-CIT-03": 1,
+      "BTE-ZERO-PAS-03": 1,
+      "BTE-ZERO-FRA-03": 1
     },
-    "PACK-ZERO-24": {
-      "BTE-ANC-ZERO-03": 8
+    "POD-RIT-MIX-12": {
+      "BTE-RIT-BN-03": 1,
+      "BTE-RIT-BE-03": 1,
+      "BTE-RIT-IC-03": 1,
+      "BTE-RIT-PF-03": 1
     },
-    "POD-ZERO-12": {
-      "BTE-ANC-ZERO-03": 4
+    "POD-ZERO-MEN-09": {
+      "BTE-ZERO-MEN-03": 3
     },
-    "POD-ZERO-24": {
-      "BTE-ANC-ZERO-03": 8
+    "POD-ZERO-CIT-09": {
+      "BTE-ZERO-CIT-03": 3
     },
-    "POD-ZERO-36": {
-      "BTE-ANC-ZERO-03": 12
+    "POD-ZERO-PAS-09": {
+      "BTE-ZERO-PAS-03": 3
     },
-    "PACK-BN-03": {
-      "BTE-ANC-BN-01": 1,
-      "DIFF-RECH": 1
+    "POD-ZERO-FRA-09": {
+      "BTE-ZERO-FRA-03": 3
     },
-    "PACK-BN-09": {
-      "BTE-ANC-BN-03": 1
+    "POD-RIT-BN-09": {
+      "BTE-RIT-BN-03": 3
     },
-    "POD-BN-03": {
-      "BTE-ANC-BN-01": 1
+    "POD-RIT-BE-09": {
+      "BTE-RIT-BE-03": 3
     },
-    "POD-BN-06": {
-      "BTE-ANC-BN-01": 2
+    "POD-RIT-IC-09": {
+      "BTE-RIT-IC-03": 3
     },
-    "POD-BN-09": {
-      "BTE-ANC-BN-03": 1
-    },
-    "PACK-BE-03": {
-      "BTE-ANC-BE-01": 1,
-      "DIFF-RECH": 1
-    },
-    "PACK-BE-09": {
-      "BTE-ANC-BE-03": 1
-    },
-    "POD-BE-03": {
-      "BTE-ANC-BE-01": 1
-    },
-    "POD-BE-06": {
-      "BTE-ANC-BE-01": 2
-    },
-    "POD-BE-09": {
-      "BTE-ANC-BE-03": 1
+    "POD-RIT-PF-09": {
+      "BTE-RIT-PF-03": 3
     }
   }
 }
