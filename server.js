@@ -16,6 +16,7 @@ const {
 // ✅ Kits recharge ZÉRO (brique A : commandes / brique B : « Mes saveurs »)
 const { verifyShopifyWebhook, ensureOrderWebhook } = require('./core/kits/shopify');
 const { processOrder } = require('./core/kits/orderFlow');
+const delayGuard = require('./core/kits/delayGuard');
 const { syncSubscription } = require('./core/kits/subscriptionKit');
 const flavorsApi = require('./core/kits/flavorsApi');
 const { requireCustomer } = require('./core/kits/customerAuth');
@@ -117,10 +118,11 @@ app.post('/webhooks/shopify/orders', express.raw({ type: '*/*' }), async (req, r
     return res.status(401).send('invalid hmac');
   }
   res.status(200).send('ok');
+  let payload;
+  try { payload = JSON.parse(req.body.toString('utf-8')); } catch (e) { return; }
+  if (!payload?.id) return;
   try {
-    const payload = JSON.parse(req.body.toString('utf-8'));
     const topic = req.header('X-Shopify-Topic') || 'orders';
-    if (!payload?.id) return;
     // Cadeau de fidélité d'abord : la commande est encore retenue, MyLink ne l'a pas (ne bloque jamais).
     const cadeau = await rewards.applyToOrder(payload.id);
     if (!cadeau.skipped) console.log('[shopify orders] cadeau', payload.name || payload.id, JSON.stringify(cadeau));
@@ -128,6 +130,14 @@ app.post('/webhooks/shopify/orders', express.raw({ type: '*/*' }), async (req, r
     console.log('[shopify orders]', topic, payload.name || payload.id, result);
   } catch (err) {
     console.error('[shopify orders] ERROR', err?.message || err, err?.userErrors || '');
+  }
+  // Délai logisticien : retient toute demande d'expédition créée après coup (offre après achat, ajout à la
+  // main…). Passe même si le traitement ci-dessus a échoué. Ne fait rien tant que DELAY_GUARD_MINUTES=0.
+  try {
+    const garde = await delayGuard.guardOrder(payload.id);
+    if (garde.retenues) console.log('[shopify orders] délai', payload.name || payload.id, JSON.stringify(garde));
+  } catch (err) {
+    console.error('[shopify orders] délai ERROR', err?.message || err, err?.userErrors || '');
   }
 });
 

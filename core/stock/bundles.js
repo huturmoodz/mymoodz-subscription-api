@@ -40,4 +40,13 @@ function componentSources() {
   return map;
 }
 
-module.exports = { buildBundles, componentSources };
+/**
+ * Fiches « maîtres » (handles produit) : celles qui portent le vrai stock d'un composant, mis à jour par MyLink.
+ * Toute autre fiche qui porte le même SKU est un miroir (son stock est recopié, jamais compté à part).
+ */
+function masterHandles() {
+  const list = load().produits_maitres;
+  return Array.isArray(list) ? list.map(String) : [];
+}
+
+module.exports = { buildBundles, componentSources, masterHandles };

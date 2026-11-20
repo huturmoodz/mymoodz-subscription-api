@@ -302,3 +302,87 @@ test('Annulation alors que les boîtes sont déjà parties → bloqué + alerte 
   assert.ok(ORDER.tags.includes('mmz-kit-erreur'));
   shopify.removeVariantsFromOrder = saved;
 });
+
+// ---------- Délai logisticien (flux Flow MMZ-DELAI-15) ----------
+const delayGuard = require('../core/kits/delayGuard');
+const FLOW_DELAY = { id: 'hd', handle: '', reasonNotes: 'MMZ-DELAI-15 : délai avant envoi logisticien' };
+const foLine = (variant, qty, requiresShipping = true) => ({ id: 'fl' + variant, remainingQuantity: qty, requiresShipping,
+  lineItem: { variant: { id: `gid://shopify/ProductVariant/${variant}` } } });
+// Comme Shopify : une demande d'expédition déjà en attente ne reçoit pas les articles ajoutés → nouvelle demande, libre.
+const addIntoNewFO = async (id, adds) => {
+  calls.push(['add', adds]);
+  adds.forEach((a) => ORDER.lineItems.nodes.push({ id: 'n' + a.variantId, quantity: a.quantity, currentQuantity: a.quantity,
+    variant: { id: `gid://shopify/ProductVariant/${a.variantId}` }, customAttributes: [] }));
+  ORDER.fulfillmentOrders.nodes.push({ id: 'foBoxes', status: 'OPEN', fulfillmentHolds: [], lineItems: { nodes: adds.map((a) => foLine(a.variantId, a.quantity)) } });
+};
+
+test('délai : désactivé par défaut, et inactif si Flow n\'a pas posé son attente (personne ne lèverait la nôtre)', () => {
+  delete process.env.DELAY_GUARD_MINUTES;
+  const o = { createdAt: new Date().toISOString(), fulfillmentOrders: { nodes: [
+    { id: 'a', status: 'ON_HOLD', fulfillmentHolds: [FLOW_DELAY], lineItems: { nodes: [foLine(MEN, 1)] } },
+    { id: 'b', status: 'OPEN', fulfillmentHolds: [], lineItems: { nodes: [foLine(CIT, 1)] } }] } };
+  assert.equal(delayGuard.minutes(), 0);
+  assert.deepEqual(delayGuard.toHold(o), []);
+  assert.deepEqual(delayGuard.toHold(o, Date.now(), 15).map((f) => f.id), ['b']);
+  o.fulfillmentOrders.nodes[0].fulfillmentHolds = [];
+  assert.deepEqual(delayGuard.toHold(o, Date.now(), 15), []);
+});
+
+test('délai : seulement les nouvelles demandes physiques d\'une commande de moins de 14 min', () => {
+  const now = Date.now();
+  const o = { createdAt: new Date(now - 5 * 60000).toISOString(), fulfillmentOrders: { nodes: [
+    { id: 'flow', status: 'ON_HOLD', fulfillmentHolds: [FLOW_DELAY], lineItems: { nodes: [foLine(MEN, 4)] } },
+    { id: 'upsell', status: 'OPEN', fulfillmentHolds: [], lineItems: { nodes: [foLine(CIT, 4)] } },
+    { id: 'appli', status: 'OPEN', fulfillmentHolds: [], lineItems: { nodes: [foLine('999', 1, false)] } },     // application numérique
+    { id: 'recharge', status: 'OPEN', fulfillmentHolds: [], lineItems: { nodes: [foLine(M1, 1)] } },            // ligne Recharge seule
+    { id: 'kit', status: 'ON_HOLD', fulfillmentHolds: [{ id: 'k', handle: 'mmz-kit', reasonNotes: 'MMZ-KIT' }], lineItems: { nodes: [foLine(PAS, 4)] } },
+    { id: 'partie', status: 'CLOSED', fulfillmentHolds: [], lineItems: { nodes: [foLine(FRA, 0)] } }] } };
+  assert.deepEqual(delayGuard.toHold(o, now, 15).map((f) => f.id), ['upsell', 'kit']);
+  assert.deepEqual(delayGuard.toHold({ ...o, createdAt: new Date(now - 14 * 60000).toISOString() }, now, 15), []);
+  assert.deepEqual(delayGuard.toHold({ ...o, cancelledAt: '2026-11-20' }, now, 15), []);
+});
+
+test('délai actif : les boîtes ajoutées (nouvelle demande) restent retenues 15 min, la ligne Recharge est close', async () => {
+  calls.length = 0;
+  process.env.DELAY_GUARD_MINUTES = '15';
+  const savedAdd = shopify.addVariantsToOrder;
+  shopify.addVariantsToOrder = addIntoNewFO;
+  shopify.fulfillWithoutShipping = async (id) => calls.push(['close', id]);
+  ORDER = order([line(M1, 1, `${CIT}:4`)]);
+  ORDER.createdAt = new Date().toISOString();
+  ORDER.fulfillmentOrders.nodes = [{ id: 'foParent', status: 'ON_HOLD', fulfillmentHolds: [{ ...FLOW_DELAY }], lineItems: { nodes: [foLine(M1, 1)] } }];
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.deepEqual(calls.map((c) => [c[0], typeof c[1] === 'string' ? c[1] : '', c[2] || '']), [
+    ['hold', 'foParent', 'mmz-kit'],        // verrou avant de modifier la commande
+    ['add', '', ''],
+    ['hold', 'foBoxes', 'mmz-delai'],       // la nouvelle demande prend le délai AVANT qu'on lève le nôtre
+    ['release', 'foParent', ''],            // notre verrou levé, le délai de Flow reste
+    ['release', 'foParent', ''],            // ligne Recharge seule : plus rien à retenir…
+    ['close', 'foParent', ''],              // … elle est close (rien de physique)
+    ['tags', '', ''],
+  ]);
+  const boxes = ORDER.fulfillmentOrders.nodes.find((f) => f.id === 'foBoxes');
+  assert.deepEqual(boxes.fulfillmentHolds.map((h) => h.handle), ['mmz-delai']);   // Flow la libérera à 15 min
+  shopify.addVariantsToOrder = savedAdd;
+  delete process.env.DELAY_GUARD_MINUTES;
+});
+
+test('commande de test : l\'attente de test couvre aussi la demande créée par l\'ajout des boîtes', async () => {
+  calls.length = 0;
+  const savedAdd = shopify.addVariantsToOrder;
+  shopify.addVariantsToOrder = addIntoNewFO;
+  shopify.fulfillWithoutShipping = async (id) => calls.push(['close', id]);
+  ORDER = order([line(M1, 1, `${MEN}:4`)]);
+  ORDER.customAttributes = [{ key: '_mmz_test', value: '1' }];
+  ORDER.fulfillmentOrders.nodes = [{ id: 'foParent', status: 'OPEN', fulfillmentHolds: [], lineItems: { nodes: [foLine(M1, 1)] } }];
+  const r = await processOrder('1');
+  assert.equal(r.done, true);
+  assert.equal(r.test, true);
+  const boxes = ORDER.fulfillmentOrders.nodes.find((f) => f.id === 'foBoxes');
+  assert.deepEqual(boxes.fulfillmentHolds.map((h) => h.handle), ['mmz-test']);    // jamais transmise à MyLink
+  const iTest = calls.findIndex((c) => c[0] === 'hold' && c[1] === 'foBoxes' && c[2] === 'mmz-test');
+  const iRelease = calls.findIndex((c) => c[0] === 'release');
+  assert.ok(iTest >= 0 && iTest < iRelease, 'attente de test posée avant de lever les nôtres');
+  shopify.addVariantsToOrder = savedAdd;
+});

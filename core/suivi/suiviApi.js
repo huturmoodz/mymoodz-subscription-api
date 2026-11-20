@@ -32,7 +32,7 @@ const ORDER_QUERY = `query($q: String!) {
   orders(first: 5, query: $q) {
     nodes {
       name createdAt email cancelledAt displayFulfillmentStatus
-      customer { email }
+      customer { defaultEmailAddress { emailAddress } }
       fulfillments(first: 10) { createdAt status trackingInfo(first: 5) { company number url } }
     }
   }
@@ -69,7 +69,7 @@ async function trouverCommande(commande, email) {
   const data = await shopify.graphql(ORDER_QUERY, { q: `name:${nom}` });
   const o = (data?.orders?.nodes || []).find((x) => x.name === nom);
   if (!o) return null;
-  const emails = [o.email, o.customer?.email].map((e) => String(e || '').trim().toLowerCase());
+  const emails = [o.email, o.customer?.defaultEmailAddress?.emailAddress].map((e) => String(e || '').trim().toLowerCase());
   return emails.includes(mail) ? o : null;
 }
 
