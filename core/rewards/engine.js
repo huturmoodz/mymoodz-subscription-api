@@ -10,7 +10,8 @@
 // L'ancienne gamme ne compte pas, sauf si REWARDS_ANCIENNE_GAMME=true.
 //
 // Où ça se branche : webhook « commande créée / modifiée », AVANT le traitement des kits.
-// À ce moment, la commande est encore en attente (règle Flow « MMZ-KIT ») : MyLink ne l'a pas.
+// À ce moment, la commande est encore en attente (règle Flow « MMZ-KIT » pour le composeur, et pour
+// toutes les commandes le délai logisticien « MMZ-DELAI-15 » une fois activé) : MyLink ne l'a pas.
 // Le traitement des kits ajoute ensuite les boîtes et lève l'attente, comme avant.
 // Le cadeau n'est jamais une Boîte ZÉRO ni une Recharge (tiers.js les refuse), donc le
 // contrôle des boîtes du traitement des kits n'est pas perturbé.
@@ -33,7 +34,8 @@ const { config, isParentVariant, isBoxVariant, monthsOf, rituelOf } = require('.
 const seal = require('../kits/seal');
 const { withLock } = require('../kits/lock');
 const { loadTiers, offrable } = require('./tiers');
-const { componentSources } = require('../stock/bundles');
+const { componentSources, masterHandles } = require('../stock/bundles');
+const { isDelayHold } = require('../kits/delayGuard');
 
 const mode = () => String(process.env.REWARDS_MODE || 'off').toLowerCase();
 const rattrapage = () => {
@@ -44,6 +46,8 @@ const TAG_PREFIX = 'mmz-cadeau-';
 const tagOf = (handle) => TAG_PREFIX + handle;
 
 const isOurHold = (h) => h.handle === 'mmz-kit' || String(h.reasonNotes || '').includes('MMZ-KIT');
+// Verrou qui garantit que MyLink n'a pas encore la commande : notre attente, ou le délai logisticien.
+const isLock = (h) => isOurHold(h) || isDelayHold(h);
 const qtyOf = (l) => Number(l.currentQuantity ?? l.quantity ?? 0);
 const vid = (l) => shopify.legacyId(l.variant?.id);
 function ok(payload, label) {
@@ -259,19 +263,21 @@ async function customerHistory(customerId) {
 }
 
 /**
- * Le cadeau manque-t-il ? Variante cadeau suivie en stock : son propre stock.
- * Non suivie : stock du composant MyLink de même SKU (ex. BTE-ZERO-MEN-03 → lu sur POD-ZERO-MEN-03,
- * DIFF-RECH → lu sur le diffuseur). Stock introuvable : on n'empêche pas (MyLink signalera).
+ * Le cadeau manque-t-il ? Variante cadeau suivie en stock : son propre stock (miroir tenu par la synchro).
+ * Non suivie : stock de la fiche maître du même SKU, celle que MyLink met à jour (ex. BTE-ZERO-MEN-03 → Boîte
+ * ZÉRO Menthe, DIFF-RECH → le diffuseur). Stock introuvable : on n'empêche pas (MyLink signalera).
  */
 async function enRupture(p, qty) {
   if (p.suivi) return p.refuseRupture && p.stock !== null && p.stock < qty;
   const src = componentSources()[p.sku] || p.sku;
   const d = await shopify.graphql(
-    `query S($q: String!) { productVariants(first: 20, query: $q) { nodes { id sku inventoryQuantity inventoryItem { tracked } } } }`,
+    `query S($q: String!) { productVariants(first: 20, query: $q) { nodes { id sku inventoryQuantity product { handle } inventoryItem { tracked } } } }`,
     { q: `sku:"${src}"` });
   const tracked = (d.productVariants?.nodes || []).filter((v) => v.sku === src && v.inventoryItem?.tracked && shopify.legacyId(v.id) !== p.id);
-  if (!tracked.length) return false;
-  return Math.max(...tracked.map((v) => Number(v.inventoryQuantity || 0))) < qty;
+  const masters = tracked.filter((v) => masterHandles().includes(v.product?.handle));
+  const ref = masters.length ? masters : tracked;
+  if (!ref.length) return false;
+  return Math.max(...ref.map((v) => Number(v.inventoryQuantity || 0))) < qty;
 }
 
 /** Choix de saveur enregistrés par le client (notes de ses abonnements Seal). Erreur → aucun choix. */
@@ -291,12 +297,16 @@ async function sealChoices(email) {
   return out;
 }
 
-/** La commande est-elle encore retenue par notre attente (MyLink ne peut pas la prendre) ? */
+/**
+ * La commande est-elle encore retenue (MyLink ne peut pas la prendre) ? Notre attente « kit » ou le délai
+ * logisticien comptent : sans ce dernier, une commande RITUEL (jamais retenue par le composeur) ne
+ * recevrait jamais son cadeau.
+ */
 function stillHeld(order) {
   const fos = order.fulfillmentOrders?.nodes || [];
   if (!fos.length || order.displayFulfillmentStatus === 'FULFILLED' || order.displayFulfillmentStatus === 'PARTIALLY_FULFILLED') return false;
   const live = fos.filter((fo) => !['CLOSED', 'CANCELLED', 'INCOMPLETE'].includes(fo.status));
-  return live.length > 0 && live.every((fo) => fo.status === 'ON_HOLD' && (fo.fulfillmentHolds || []).some(isOurHold));
+  return live.length > 0 && live.every((fo) => fo.status === 'ON_HOLD' && (fo.fulfillmentHolds || []).some(isLock));
 }
 
 async function addTag(orderGid, tag) {
@@ -309,7 +319,8 @@ async function addTag(orderGid, tag) {
 /**
  * Après l'ajout, Shopify peut ranger le cadeau dans une NOUVELLE demande d'expédition, non retenue :
  * MyLink pourrait l'envoyer seule. On la retient avec la même attente que les kits (« mmz-kit ») :
- * le traitement des kits, qui passe juste après, lève toutes ces attentes en même temps.
+ * le traitement des kits, qui passe juste après, lève toutes ces attentes en même temps (en gardant
+ * le délai logisticien, étendu à cette nouvelle demande : voir kits/delayGuard.js).
  */
 async function reholdNewFOs(orderGid) {
   const d = await shopify.graphql(ORDER_QUERY, { id: orderGid });
