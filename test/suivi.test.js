@@ -10,7 +10,7 @@ const suivi = require('../core/suivi/suiviApi');
 
 const ORDER = () => ({
   name: '#6224969', createdAt: '2026-11-13T11:03:23Z', email: 'Client@Exemple.fr', cancelledAt: null,
-  displayFulfillmentStatus: 'FULFILLED', customer: { email: 'client@exemple.fr' },
+  displayFulfillmentStatus: 'FULFILLED', customer: { defaultEmailAddress: { emailAddress: 'client@exemple.fr' } },
   fulfillments: [
     { createdAt: '2026-11-13T15:00:00Z', status: 'SUCCESS',
       trackingInfo: [{ company: 'La Poste Colissimo', number: '87001511994584O', url: 'https://www.laposte.fr/particulier/outils/suivre-vos-envois?code=87001511994584O' }] },

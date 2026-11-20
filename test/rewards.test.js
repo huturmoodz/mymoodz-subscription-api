@@ -30,7 +30,7 @@ const order = (id, day, { sub = true, cancelled = false, tags = [], extra = [], 
 
 test('contrôle des paliers : Boîte ZÉRO, Recharge, SKU absent ou inconnu de MyLink → refusés', () => {
   assert.deepEqual(tier('ok', 3, giftRef()).problemes, []);
-  assert.match(tier('a', 3, giftRef({ id: BOX, sku: 'POD-ZERO-MEN-03' })).problemes.join(), /Boîte ZÉRO/);
+  assert.match(tier('a', 3, giftRef({ id: BOX, sku: 'BTE-ZERO-MEN-03' })).problemes.join(), /Boîte ZÉRO/);
   assert.match(tier('b', 3, giftRef({ id: REC, sku: 'REC-ZERO-1M' })).problemes.join(), /Recharge/);
   assert.match(tier('c', 3, giftRef({ sku: '' })).problemes.join(), /pas de SKU/);
   assert.match(tier('d', 3, giftRef({ sku: 'INCONNU-1' })).problemes.join(), /absent de compositions/);
@@ -73,7 +73,7 @@ test('vue portail : offert, à venir, bientôt (inactif), prochain colis', () =>
   assert.equal(w.paliers[0].prochain_colis, true);                    // formule 3 mois : le prochain colis fait franchir le cap
 });
 
-function fakeShopify(cur, history, { stock = 10, compStock = 5, ref } = {}) {
+function fakeShopify(cur, history, { stock = 10, compStock = 5, mirrorStock = null, ref } = {}) {
   const calls = [];
   shopify.graphql = async (q, v) => {
     if (q.includes('CadeauCommande')) {
@@ -82,7 +82,13 @@ function fakeShopify(cur, history, { stock = 10, compStock = 5, ref } = {}) {
       }
       return { order: cur };
     }
-    if (q.includes('productVariants')) { calls.push(['stock', v.q]); return { productVariants: { nodes: [{ id: 'gid://shopify/ProductVariant/77', sku: 'POD-ZERO-MEN-03', inventoryQuantity: compStock, inventoryItem: { tracked: true } }] } }; }
+    if (q.includes('productVariants')) {
+      calls.push(['stock', v.q]);
+      const nodes = [{ id: 'gid://shopify/ProductVariant/77', sku: 'BTE-ZERO-MEN-03', inventoryQuantity: compStock, product: { handle: 'boite-zero' }, inventoryItem: { tracked: true } }];
+      // Recharge « 1 semaine » : même SKU, miroir de la boîte maître (son chiffre ne fait jamais foi)
+      if (mirrorStock !== null) nodes.push({ id: 'gid://shopify/ProductVariant/78', sku: 'BTE-ZERO-MEN-03', inventoryQuantity: mirrorStock, product: { handle: 'recharge-zero-a-la-semaine' }, inventoryItem: { tracked: true } });
+      return { productVariants: { nodes } };
+    }
     if (q.includes('fulfillmentOrderHold')) { calls.push(['retenue', v.id, v.hold.handle]); return { fulfillmentOrderHold: { fulfillmentHold: { id: 'h' }, userErrors: [] } }; }
     if (q.includes('CadeauHistorique')) return { orders: { pageInfo: { hasNextPage: false }, nodes: history } };
     if (q.includes('metaobjects')) {
@@ -136,21 +142,40 @@ test('commande déjà libérée pour MyLink ou cadeau en rupture : reporté, rie
   assert.equal(r.skipped, true);
 });
 
-test('cadeau non suivi en stock : on regarde le composant MyLink (boîte Menthe à 0 → reporté)', async () => {
+test('cadeau non suivi en stock : on regarde la fiche maître MyLink (boîte Menthe à 0 → reporté, même si un miroir dit 8)', async () => {
   process.env.REWARDS_MODE = 'live';
   tiersMod._resetCache();
   const cur = order(5, 5);
   const ref = giftRef({ sku: 'BTE-ZERO-MEN-03', price: '0.00', inventoryItem: { tracked: false }, inventoryQuantity: null });
-  let calls = fakeShopify(cur, [order(1, 1), order(4, 4), cur], { ref, compStock: 0 });
+  let calls = fakeShopify(cur, [order(1, 1), order(4, 4), cur], { ref, compStock: 0, mirrorStock: 8 });
   let r = await eng.applyToOrder('5');
   assert.equal(r.reportes[0].raison, 'rupture');
-  assert.deepEqual(calls, [['stock', 'sku:"POD-ZERO-MEN-03"']]);
+  assert.deepEqual(calls, [['stock', 'sku:"BTE-ZERO-MEN-03"']]);
 
   tiersMod._resetCache();
   calls = fakeShopify(cur, [order(1, 1), order(4, 4), cur], { ref, compStock: 8 });
   r = await eng.applyToOrder('5');
   assert.equal(r.offerts.length, 1);
   assert.ok(!calls.some((c) => c[0] === 'remise'));   // déjà à 0 € : pas de remise
+  process.env.REWARDS_MODE = 'off';
+});
+
+test('délai logisticien : une commande retenue seulement par le délai (RITUEL, sans composeur) reçoit son cadeau', async () => {
+  process.env.REWARDS_MODE = 'live';
+  tiersMod._resetCache();
+  const cur = order(5, 5);
+  cur.fulfillmentOrders.nodes[0] = { id: 'fo1', status: 'ON_HOLD', fulfillmentHolds: [{ handle: '', reasonNotes: 'MMZ-DELAI-15 : délai avant envoi logisticien' }] };
+  const calls = fakeShopify(cur, [order(1, 1), order(4, 4), cur]);
+  const r = await eng.applyToOrder('5');
+  assert.equal(r.offerts.length, 1);
+  assert.ok(calls.includes('commit'));
+  // Une autre attente (fraude, équipe…) n'est pas un verrou : on ne touche pas à la commande
+  tiersMod._resetCache();
+  cur.fulfillmentOrders.nodes[0] = { id: 'fo1', status: 'ON_HOLD', fulfillmentHolds: [{ handle: 'autre-app', reasonNotes: 'Vérification fraude' }] };
+  const calls2 = fakeShopify(cur, [order(1, 1), order(4, 4), cur]);
+  const r2 = await eng.applyToOrder('5');
+  assert.equal(r2.reportes[0].raison, 'commande_deja_liberee');
+  assert.deepEqual(calls2, []);
   process.env.REWARDS_MODE = 'off';
 });
 

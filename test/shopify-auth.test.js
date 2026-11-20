@@ -54,7 +54,9 @@ test('abonnement webhook créé seulement s\'il manque', async () => {
     if (q.includes('webhookSubscriptionCreate')) {
       created++;
       const t = JSON.parse(opts.body).variables.topic;
-      existing[t] = [{ id: 'w', endpoint: { callbackUrl: 'https://x/webhooks/shopify/orders' } }];
+      existing[t] = [{ id: 'w', uri: 'https://x/webhooks/shopify/orders' }];
+      assert.equal(JSON.parse(opts.body).variables.url, 'https://x/webhooks/shopify/orders');
+      assert.ok(q.includes('uri: $url'));   // API 2026-10 : « uri » remplace « callbackUrl »
       return { ok: true, status: 200, json: async () => ({ data: { webhookSubscriptionCreate: { webhookSubscription: { id: 'w' }, userErrors: [] } } }) };
     }
     return { ok: true, status: 200, json: async () => ({ data: { webhookSubscriptions: { nodes: existing[JSON.parse(opts.body).variables.topics[0]] || [] } } }) };
